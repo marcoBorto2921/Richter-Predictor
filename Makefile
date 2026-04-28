@@ -1,12 +1,9 @@
 CONFIG = configs/config.yaml
 PYTHON = .venv/Scripts/python  # Windows; change to .venv/bin/python on Linux/macOS
 
-.PHONY: all eda train-lgb train-xgb train-cat train-all ensemble lint clean
+.PHONY: all train-lgb train-xgb train-cat train-all ensemble lint clean
 
 all: train-all ensemble
-
-eda:
-	$(PYTHON) notebooks/01_eda.py --config $(CONFIG)
 
 train-lgb:
 	$(PYTHON) src/train.py --config $(CONFIG) --model lgb

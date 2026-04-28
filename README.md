@@ -82,9 +82,6 @@ Place competition data files in `data/raw/`:
 ## Usage
 
 ```bash
-# EDA
-python notebooks/01_eda.py --config configs/config.yaml
-
 # Train individual models (--no-optuna for quick smoke test)
 python src/train.py --config configs/config.yaml --model lgb
 python src/train.py --config configs/config.yaml --model cat
@@ -97,7 +94,7 @@ python src/ensemble.py --config configs/config.yaml
 Or via Make:
 
 ```bash
-make eda
+make smoke       # LGB only, no Optuna — first score in ~2 min
 make train-lgb
 make train-all
 make ensemble
@@ -116,12 +113,10 @@ Richter-Predictor/
 │   ├── train.py              — training + Optuna HPO per model
 │   ├── ensemble.py           — weight optimization + submission generation
 │   └── predict.py            — standalone inference with saved models
-├── notebooks/01_eda.py       — exploratory data analysis
 ├── utils/seed.py             — global seed utility
 ├── data/raw/                 — competition CSVs (gitignored)
 ├── models/                   — saved model artifacts (gitignored)
 ├── submissions/              — timestamped submission CSVs (gitignored)
-├── reports/                  — EDA plots
 ├── TECHNICAL_CHOICES.md      — architectural decision record
 └── requirements.txt
 ```
