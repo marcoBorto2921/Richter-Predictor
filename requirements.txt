@@ -1,0 +1,24 @@
+# Core ML
+lightgbm==4.3.0
+xgboost==2.0.3
+catboost==1.2.5
+optuna==3.6.1
+scikit-learn==1.4.2
+
+# Data
+numpy==1.26.4
+pandas==2.2.2
+scipy==1.13.0
+
+# Serialization & config
+joblib==1.4.0
+pyyaml==6.0.1
+
+# Visualization (EDA only)
+matplotlib==3.8.4
+seaborn==0.13.2
+
+# Dev tools
+ruff==0.4.4
+vulture==2.11
+deptry==0.16.2
