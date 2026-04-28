@@ -125,7 +125,14 @@ def main() -> None:
 
     ensemble_cfg = cfg["ensemble"]
     models_order: list[str] = args.models or ensemble_cfg["models_order"]
-    initial_weights: list[float] = ensemble_cfg["initial_weights"][: len(models_order)]
+    # Look up weights by model name so a custom --models order doesn't silently
+    # pick up weights intended for a different model.
+    config_weight_map: dict[str, float] = dict(
+        zip(ensemble_cfg["models_order"], ensemble_cfg["initial_weights"])
+    )
+    initial_weights: list[float] = [
+        config_weight_map.get(m, 1.0 / len(models_order)) for m in models_order
+    ]
 
     # -- Load artifacts --
     print("Loading val probabilities...")

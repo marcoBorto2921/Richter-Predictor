@@ -89,12 +89,20 @@ def main() -> None:
     ensemble_cfg = cfg["ensemble"]
     models_order: list[str] = args.models or ensemble_cfg["models_order"]
 
-    # Weights: CLI > config defaults
+    # Weights: CLI > config defaults (look up by name, not positional slice)
+    config_weights: dict[str, float] = dict(
+        zip(ensemble_cfg["models_order"], ensemble_cfg["initial_weights"])
+    )
     if args.weights is not None:
+        if len(args.weights) != len(models_order):
+            raise ValueError(
+                f"--weights has {len(args.weights)} values but --models has {len(models_order)}"
+            )
         weights = np.array(args.weights, dtype=float)
     else:
         weights = np.array(
-            ensemble_cfg["initial_weights"][: len(models_order)], dtype=float
+            [config_weights.get(m, 1.0 / len(models_order)) for m in models_order],
+            dtype=float,
         )
     weights = weights / weights.sum()
 
@@ -102,10 +110,21 @@ def main() -> None:
     print("Loading data...")
     df_train, df_test, test_ids = load_data_test(cfg)
 
-    # Use all of df_train as the "train fold" for target encoding
-    # (no split needed here — we just need the encoder fitted on train)
-    # Create a dummy val (first 10 rows) so build_features API is satisfied
-    df_dummy_val = df_train.iloc[:10].reset_index(drop=True)
+    # Reproduce the exact same train/val split used during training so the
+    # target encoder sees only the original train fold (no leakage).
+    y_all = df_train[cfg["data"]["target_col"]].values - 1
+    idx = np.arange(len(df_train))
+    idx_train, _ = train_test_split(
+        idx,
+        test_size=cfg["split"]["test_size"],
+        random_state=cfg["split"]["random_state"],
+        stratify=y_all,
+    )
+    df_tr = df_train.iloc[idx_train].reset_index(drop=True)
+    # dummy val: just the first row of the val fold — not used, only satisfies the API
+    df_dummy_val = (
+        df_train.drop(index=df_train.index[idx_train]).iloc[:1].reset_index(drop=True)
+    )
 
     # -- Predict with each model --
     test_probas: list[np.ndarray] = []
@@ -121,7 +140,7 @@ def main() -> None:
         model = joblib.load(model_path)
 
         mode = "catboost" if model_name == "cat" else "lgb_xgb"
-        _, _, X_test, _ = build_features(df_train, df_dummy_val, df_test, cfg, mode)
+        _, _, X_test, _ = build_features(df_tr, df_dummy_val, df_test, cfg, mode)
 
         proba = model.predict_proba(X_test)
         test_probas.append(proba)

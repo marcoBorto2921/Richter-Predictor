@@ -1,6 +1,7 @@
 """Exploratory Data Analysis for Richter's Predictor.
 
-Outputs plots to reports/ and prints summary stats to stdout.
+Outputs plots to reports/ (or the path in config output.reports_dir) and prints
+summary stats to stdout.
 
 Usage:
     python notebooks/01_eda.py --config configs/config.yaml
@@ -23,8 +24,10 @@ import yaml
 plt.rcParams["figure.dpi"] = 120
 sns.set_theme(style="whitegrid", palette="muted")
 
-REPORTS_DIR = Path("reports")
-REPORTS_DIR.mkdir(exist_ok=True)
+
+# ---------------------------------------------------------------------------
+# Data loading
+# ---------------------------------------------------------------------------
 
 
 def load_data(cfg: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -34,6 +37,11 @@ def load_data(cfg: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
     df = tv.merge(tl, on=cfg["data"]["id_col"])
     df_test = pd.read_csv(cfg["data"]["test_values"], encoding="utf-8")
     return df, df_test
+
+
+# ---------------------------------------------------------------------------
+# Analysis functions
+# ---------------------------------------------------------------------------
 
 
 def print_basic_stats(df: pd.DataFrame, df_test: pd.DataFrame) -> None:
@@ -53,7 +61,9 @@ def print_basic_stats(df: pd.DataFrame, df_test: pd.DataFrame) -> None:
         print("\nNo missing values in train.")
 
 
-def plot_target_distribution(df: pd.DataFrame, target_col: str) -> None:
+def plot_target_distribution(
+    df: pd.DataFrame, target_col: str, reports_dir: Path
+) -> None:
     """Bar chart of damage_grade distribution."""
     counts = df[target_col].value_counts().sort_index()
     pct = counts / counts.sum() * 100
@@ -68,7 +78,7 @@ def plot_target_distribution(df: pd.DataFrame, target_col: str) -> None:
     ax.set_ylabel("count")
     ax.set_title("Target distribution — damage_grade")
     plt.tight_layout()
-    out = REPORTS_DIR / "target_distribution.png"
+    out = reports_dir / "target_distribution.png"
     plt.savefig(out)
     plt.close()
     print(f"\nTarget distribution:\n{counts}")
@@ -83,7 +93,9 @@ def plot_geo_cardinality(df: pd.DataFrame, geo_cols: list[str]) -> None:
         print(f"  {col}: {n} unique values")
 
 
-def plot_numeric_distributions(df: pd.DataFrame, target_col: str) -> None:
+def plot_numeric_distributions(
+    df: pd.DataFrame, target_col: str, reports_dir: Path
+) -> None:
     """KDE plots of numeric features by damage grade."""
     numeric_cols = [
         "age",
@@ -104,14 +116,14 @@ def plot_numeric_distributions(df: pd.DataFrame, target_col: str) -> None:
         ax.legend(fontsize=7)
     plt.suptitle("Numeric feature distributions by damage grade", y=1.02)
     plt.tight_layout()
-    out = REPORTS_DIR / "numeric_distributions.png"
+    out = reports_dir / "numeric_distributions.png"
     plt.savefig(out, bbox_inches="tight")
     plt.close()
     print(f"Saved: {out}")
 
 
 def plot_categorical_damage_rates(
-    df: pd.DataFrame, target_col: str, cat_cols: list[str]
+    df: pd.DataFrame, target_col: str, cat_cols: list[str], reports_dir: Path
 ) -> None:
     """Heatmap of mean damage grade per category level."""
     n = len(cat_cols)
@@ -138,14 +150,14 @@ def plot_categorical_damage_rates(
 
     plt.suptitle("Damage grade rate by categorical feature", y=1.02)
     plt.tight_layout()
-    out = REPORTS_DIR / "cat_damage_rates.png"
+    out = reports_dir / "cat_damage_rates.png"
     plt.savefig(out, bbox_inches="tight")
     plt.close()
     print(f"Saved: {out}")
 
 
 def plot_superstructure_damage(
-    df: pd.DataFrame, target_col: str, super_cols: list[str]
+    df: pd.DataFrame, target_col: str, super_cols: list[str], reports_dir: Path
 ) -> None:
     """Bar chart: mean damage grade for buildings with/without each superstructure type."""
     records = []
@@ -184,13 +196,15 @@ def plot_superstructure_damage(
     ax.set_title("Mean damage grade by superstructure type")
     ax.legend()
     plt.tight_layout()
-    out = REPORTS_DIR / "superstructure_damage.png"
+    out = reports_dir / "superstructure_damage.png"
     plt.savefig(out)
     plt.close()
     print(f"Saved: {out}")
 
 
-def plot_geo_damage_heatmap(df: pd.DataFrame, target_col: str) -> None:
+def plot_geo_damage_heatmap(
+    df: pd.DataFrame, target_col: str, reports_dir: Path
+) -> None:
     """Top-30 geo_level_1 by mean damage grade (bar chart)."""
     geo_damage = (
         df.groupby("geo_level_1_id")[target_col].mean().sort_values(ascending=False)
@@ -204,7 +218,7 @@ def plot_geo_damage_heatmap(df: pd.DataFrame, target_col: str) -> None:
     ax.axhline(df[target_col].mean(), color="red", linestyle="--", label="overall mean")
     ax.legend()
     plt.tight_layout()
-    out = REPORTS_DIR / "geo_damage_heatmap.png"
+    out = reports_dir / "geo_damage_heatmap.png"
     plt.savefig(out)
     plt.close()
     print(f"Saved: {out}")
@@ -222,6 +236,11 @@ def compute_feature_importance_proxy(df: pd.DataFrame, target_col: str) -> None:
     print("\nNumeric feature correlations with damage_grade:")
     corr = df[numeric_cols + [target_col]].corr()[target_col].drop(target_col)
     print(corr.sort_values(key=abs, ascending=False).to_string())
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 
 def parse_args() -> argparse.Namespace:
@@ -242,6 +261,9 @@ def main() -> None:
     with open(args.config, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
+    reports_dir = Path(cfg.get("output", {}).get("reports_dir", "reports"))
+    reports_dir.mkdir(parents=True, exist_ok=True)
+
     df, df_test = load_data(cfg)
     target_col = cfg["data"]["target_col"]
     geo_cols = cfg["features"]["geo_cols"]
@@ -249,17 +271,15 @@ def main() -> None:
     super_cols = cfg["features"]["superstructure_cols"]
 
     print_basic_stats(df, df_test)
-    plot_target_distribution(df, target_col)
+    plot_target_distribution(df, target_col, reports_dir)
     plot_geo_cardinality(df, geo_cols)
-    plot_numeric_distributions(df, target_col)
-    plot_categorical_damage_rates(
-        df, target_col, cat_cols_low[:4]
-    )  # first 4 for readability
-    plot_superstructure_damage(df, target_col, super_cols)
-    plot_geo_damage_heatmap(df, target_col)
+    plot_numeric_distributions(df, target_col, reports_dir)
+    plot_categorical_damage_rates(df, target_col, cat_cols_low[:4], reports_dir)
+    plot_superstructure_damage(df, target_col, super_cols, reports_dir)
+    plot_geo_damage_heatmap(df, target_col, reports_dir)
     compute_feature_importance_proxy(df, target_col)
 
-    print("\nEDA complete. Plots saved to reports/")
+    print(f"\nEDA complete. Plots saved to {reports_dir}/")
 
 
 if __name__ == "__main__":

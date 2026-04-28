@@ -137,7 +137,8 @@ def _train_xgb(
         verbose=False,
         early_stopping_rounds=early_rounds,
     )
-    best_iter = int(model.best_iteration)
+    # best_iteration is 0-based; add 1 so refit uses the correct n_estimators
+    best_iter = int(model.best_iteration) + 1
     return model, best_iter
 
 
@@ -160,7 +161,8 @@ def _train_cat(
         early_stopping_rounds=early_rounds,
         verbose=False,
     )
-    best_iter = int(model.get_best_iteration())
+    # get_best_iteration() is 0-based; add 1 so refit uses the correct iterations count
+    best_iter = int(model.get_best_iteration()) + 1
     return model, best_iter
 
 
@@ -483,8 +485,18 @@ def main() -> None:
     test_ids = df_test[id_col].values
     np.save(models_dir / "test_ids.npy", test_ids)
 
-    # Save val true labels (for ensemble.py)
-    np.save(models_dir / "val_true.npy", y_val)
+    # Save val true labels (for ensemble.py).
+    # If the file already exists (another model was trained first), assert that the
+    # labels match — a mismatch means different split seeds were used across runs.
+    val_true_path = models_dir / "val_true.npy"
+    if val_true_path.exists():
+        existing = np.load(val_true_path)
+        if not np.array_equal(existing, y_val):
+            raise RuntimeError(
+                "val_true.npy already exists but labels differ from the current split. "
+                "Delete models/ and retrain all models with the same config."
+            )
+    np.save(val_true_path, y_val)
 
     # -- Baseline train (default params from config) --
     default_params = dict(cfg["models"][args.model])
