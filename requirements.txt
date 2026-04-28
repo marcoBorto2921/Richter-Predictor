@@ -1,15 +1,15 @@
 # Core ML
-lightgbm==4.3.0
-xgboost==2.0.3
-catboost==1.2.5
-optuna==3.6.1
-scikit-learn==1.4.2
+lightgbm==4.6.0
+xgboost==3.2.0
+catboost==1.2.10
+optuna==4.8.0
+scikit-learn==1.8.0
 
 # Data
-numpy==1.26.4
+numpy==2.4.4
 pandas==2.2.2
-scipy==1.13.0
+scipy==1.17.1
 
 # Serialization & config
-joblib==1.4.0
-pyyaml==6.0.1
+joblib==1.5.3
+pyyaml==6.0.3
