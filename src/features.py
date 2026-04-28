@@ -71,7 +71,7 @@ def _apply_target_encoder(
     """
     out = df.copy()
     for col_name, (mapping, fallback) in encoder.items():
-        out[col_name] = out[geo_col].map(mapping).fillna(fallback)
+        out.loc[:, col_name] = out[geo_col].map(mapping).fillna(fallback)
     return out
 
 
@@ -96,11 +96,11 @@ def _add_shared_features(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     super_cols = cfg["features"]["superstructure_cols"]
     sec_cols = cfg["features"]["secondary_use_cols"]
 
-    out["superstructure_count"] = out[super_cols].sum(axis=1)
-    out["has_secondary_use_any"] = (out[sec_cols].sum(axis=1) > 0).astype(np.int8)
-    out["height_to_area"] = out["height_percentage"] / (out["area_percentage"] + 1.0)
-    out["floors_ge3"] = (out["count_floors_pre_eq"] >= 3).astype(np.int8)
-    out["age_x_area"] = out["age"] * out["area_percentage"]
+    out.loc[:, "superstructure_count"] = out[super_cols].sum(axis=1)
+    out.loc[:, "has_secondary_use_any"] = (out[sec_cols].sum(axis=1) > 0).astype(np.int8)
+    out.loc[:, "height_to_area"] = out["height_percentage"] / (out["area_percentage"] + 1.0)
+    out.loc[:, "floors_ge3"] = (out["count_floors_pre_eq"] >= 3).astype(np.int8)
+    out.loc[:, "age_x_area"] = out["age"] * out["area_percentage"]
     return out
 
 
@@ -169,10 +169,10 @@ def build_features(
 
         # Interaction: age × geo_level_2 class-2 encoding (high-damage zones × age)
         geo2_k2_col = "geo_level_2_id_te_k2"
-        tr["age_x_geo2_damage"] = tr["age"] * tr[geo2_k2_col]
-        va["age_x_geo2_damage"] = va["age"] * va[geo2_k2_col]
+        tr.loc[:, "age_x_geo2_damage"] = tr["age"] * tr[geo2_k2_col]
+        va.loc[:, "age_x_geo2_damage"] = va["age"] * va[geo2_k2_col]
         if te is not None:
-            te["age_x_geo2_damage"] = te["age"] * te[geo2_k2_col]
+            te.loc[:, "age_x_geo2_damage"] = te["age"] * te[geo2_k2_col]
 
         # -- Label-encode low-cardinality categoricals --
         le_map: dict[str, LabelEncoder] = {}
@@ -184,12 +184,12 @@ def build_features(
         for col, le in le_map.items():
             for frame in [tr, va] + ([te] if te is not None else []):
                 known = set(le.classes_)
-                frame[col] = (
+                cleaned = (
                     frame[col]
                     .astype(str)
                     .apply(lambda x: x if x in known else le.classes_[0])
                 )
-                frame[col] = le.transform(frame[col])
+                frame[col] = le.transform(cleaned).astype(int)
 
         # -- Drop original geo columns (replaced by target-encoded versions) --
         drop_cols = geo_cols + [target_col]
@@ -206,8 +206,10 @@ def build_features(
         # Keep all categoricals as strings — CatBoost handles encoding internally.
         # Convert geo cols to string so CatBoost treats them as categorical.
         for col in geo_cols + cat_cols_low:
-            for frame in [tr, va] + ([te] if te is not None else []):
-                frame[col] = frame[col].astype(str)
+            tr[col] = tr[col].astype(str)
+            va[col] = va[col].astype(str)
+            if te is not None:
+                te[col] = te[col].astype(str)
 
         drop_cols = [target_col]
         X_train = tr.drop(columns=[c for c in drop_cols if c in tr.columns])

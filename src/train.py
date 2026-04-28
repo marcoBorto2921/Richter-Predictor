@@ -129,13 +129,16 @@ def _train_xgb(
     """Train XGBoost with early stopping. Returns (model, best_iteration)."""
     n_estimators = params.pop("n_estimators", 3000)
     early_rounds = params.pop("early_stopping_rounds", 100)
-    model = _make_xgb({**params, "n_estimators": n_estimators})
+    model = _make_xgb({
+        **params,
+        "n_estimators": n_estimators,
+        "early_stopping_rounds": early_rounds,
+    })
     model.fit(
         X_train,
         y_train,
         eval_set=[(X_val, y_val)],
         verbose=False,
-        early_stopping_rounds=early_rounds,
     )
     # best_iteration is 0-based; add 1 so refit uses the correct n_estimators
     best_iter = int(model.best_iteration) + 1
