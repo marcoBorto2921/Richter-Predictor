@@ -363,13 +363,20 @@ def run_optuna(
     )
 
     if model_name == "lgb":
-        obj = lambda trial: _lgb_objective(trial, X_train, y_train, X_val, y_val)
+
+        def obj(trial: optuna.Trial) -> float:
+            return _lgb_objective(trial, X_train, y_train, X_val, y_val)
+
     elif model_name == "xgb":
-        obj = lambda trial: _xgb_objective(trial, X_train, y_train, X_val, y_val)
+
+        def obj(trial: optuna.Trial) -> float:
+            return _xgb_objective(trial, X_train, y_train, X_val, y_val)
+
     elif model_name == "cat":
-        obj = lambda trial: _cat_objective(
-            trial, X_train, y_train, X_val, y_val, cat_cols
-        )
+
+        def obj(trial: optuna.Trial) -> float:
+            return _cat_objective(trial, X_train, y_train, X_val, y_val, cat_cols)
+
     else:
         raise ValueError(f"Unknown model: {model_name!r}")
 

@@ -23,6 +23,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import yaml
+from sklearn.model_selection import train_test_split
 
 from src.features import build_features
 from utils.seed import set_global_seed

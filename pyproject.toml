@@ -1,0 +1,5 @@
+[tool.deptry]
+# pyyaml is installed as 'pyyaml' but imported as 'yaml'
+package_module_name_map = { pyyaml = "yaml" }
+# ruff/vulture/deptry are dev tools in requirements-dev.txt — ignore DEP002 for them
+per_rule_ignores = { DEP002 = ["ruff", "vulture", "deptry"] }
