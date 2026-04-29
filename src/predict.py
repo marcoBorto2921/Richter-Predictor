@@ -5,6 +5,10 @@ model artifacts and re-runs prediction without needing the stored .npy
 probability files. Useful for re-generating a submission after changing
 the ensemble weights manually.
 
+NOTE: In k-fold mode, train.py does not save a single refit model. Use
+ensemble.py (which reads the averaged test .npy files) instead. This
+script only works with --no-kfold trained models.
+
 Usage:
     python src/predict.py --config configs/config.yaml
     python src/predict.py --config configs/config.yaml --weights 0.4 0.35 0.25
@@ -13,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +32,8 @@ from sklearn.model_selection import train_test_split
 
 from src.features import build_features
 from utils.seed import set_global_seed
+
+logger = logging.getLogger(__name__)
 
 
 def load_data_test(cfg: dict) -> tuple[pd.DataFrame, pd.DataFrame, np.ndarray]:
@@ -76,6 +83,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     """Main prediction entrypoint."""
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     args = parse_args()
 
     with open(args.config, encoding="utf-8") as f:
@@ -107,8 +115,7 @@ def main() -> None:
         )
     weights = weights / weights.sum()
 
-    # -- Load data --
-    print("Loading data...")
+    logger.info("Loading data...")
     df_train, df_test, test_ids = load_data_test(cfg)
 
     # Reproduce the exact same train/val split used during training so the
@@ -137,7 +144,7 @@ def main() -> None:
                 f"Missing {model_path}. Run: python src/train.py --model {model_name}"
             )
 
-        print(f"Predicting with {model_name}...")
+        logger.info("Predicting with %s...", model_name)
         model = joblib.load(model_path)
 
         mode = "catboost" if model_name == "cat" else "lgb_xgb"
@@ -145,7 +152,7 @@ def main() -> None:
 
         proba = model.predict_proba(X_test)
         test_probas.append(proba)
-        print(f"  {model_name} proba shape: {proba.shape}")
+        logger.info("  %s proba shape: %s", model_name, proba.shape)
 
     # -- Blend --
     blended = sum(w * p for w, p in zip(weights, test_probas))
@@ -160,11 +167,12 @@ def main() -> None:
     submission = pd.DataFrame({"building_id": test_ids, "damage_grade": damage_grade})
     submission.to_csv(submission_path, index=False, encoding="utf-8")
 
-    print(f"\nSubmission saved: {submission_path}")
-    print(f"Shape: {submission.shape}")
-    print(f"Weights used: {dict(zip(models_order, weights.tolist()))}")
-    print(
-        f"damage_grade distribution:\n{submission['damage_grade'].value_counts().sort_index()}"
+    logger.info("Submission saved: %s", submission_path)
+    logger.info("Shape: %s", submission.shape)
+    logger.info("Weights used: %s", dict(zip(models_order, weights.tolist())))
+    logger.info(
+        "damage_grade distribution:\n%s",
+        submission["damage_grade"].value_counts().sort_index(),
     )
 
 

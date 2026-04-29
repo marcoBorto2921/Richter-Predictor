@@ -11,6 +11,10 @@ split:
   test_size: 0.2
   random_state: 42
 
+cv:
+  n_splits: 5
+  strategy: stratified_kfold
+
 seed: 42
 
 features:
@@ -97,8 +101,8 @@ models:
     learning_rate: 0.05
     bagging_temperature: 0.5
     random_strength: 1.0
-    iterations: 3000
-    early_stopping_rounds: 100
+    iterations: 1000
+    early_stopping_rounds: 30
     verbose: 0
     random_state: 42
 
@@ -107,6 +111,9 @@ optuna:
   direction: maximize     # maximize F1-micro
   timeout: null           # no wall-clock limit
   show_progress_bar: true
+  n_estimators_ceiling: 3000   # tree-count ceiling for early stopping in trial objectives
+  early_stopping_rounds: 50    # tighter patience for HPO trials (vs 100 in post-HPO training)
+  best_iter_fallback: 500      # fallback best_iter if trial user_attr is missing (should never occur)
 
 ensemble:
   # Initial weight guess: [lgb, cat, xgb] — must sum to 1

@@ -152,8 +152,12 @@ def _add_shared_features(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     sec_cols = cfg["features"]["secondary_use_cols"]
 
     out.loc[:, "superstructure_count"] = out[super_cols].sum(axis=1)
-    out.loc[:, "has_secondary_use_any"] = (out[sec_cols].sum(axis=1) > 0).astype(np.int8)
-    out.loc[:, "height_to_area"] = out["height_percentage"] / (out["area_percentage"] + 1.0)
+    out.loc[:, "has_secondary_use_any"] = (out[sec_cols].sum(axis=1) > 0).astype(
+        np.int8
+    )
+    out.loc[:, "height_to_area"] = out["height_percentage"] / (
+        out["area_percentage"] + 1.0
+    )
     out.loc[:, "floors_ge3"] = (out["count_floors_pre_eq"] >= 3).astype(np.int8)
     out.loc[:, "age_x_area"] = out["age"] * out["area_percentage"]
     return out
