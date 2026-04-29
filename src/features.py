@@ -75,6 +75,61 @@ def _apply_target_encoder(
     return out
 
 
+def _fit_empirical_bayes_encoder(
+    df_train: pd.DataFrame,
+    geo_col: str,
+    target_col: str,
+    classes: list[int],
+) -> dict[str, tuple[pd.Series, float]]:
+    """Fit an empirical Bayes encoder with adaptive shrinkage on training fold.
+
+    GLMM-style encoding: instead of fixed smoothing weight, the shrinkage per
+    category adapts based on estimated between-group variance (τ²).
+
+    Formula per category c:
+        encoded(c) = (n_c * θ_c + global_mean / τ²) / (n_c + 1/τ²)
+
+    Categories with few samples shrink heavily toward global mean.
+    Categories with many samples keep their group mean.
+    τ² is estimated from the data via method-of-moments.
+
+    Args:
+        df_train: Training DataFrame containing geo_col and target_col.
+        geo_col: Name of the geographic column to encode.
+        target_col: Name of the target column.
+        classes: List of class labels (e.g. [1, 2, 3]).
+
+    Returns:
+        Dict mapping encoded column name to (mapping_series, global_fallback).
+    """
+    result: dict[str, tuple[pd.Series, float]] = {}
+    for k in classes:
+        col_name = f"{geo_col}_te_k{k}"
+        y_binary = (df_train[target_col] == k).astype(float)
+        global_mean = float(y_binary.mean())
+
+        stats = y_binary.groupby(df_train[geo_col]).agg(["count", "mean", "var"])
+        n_groups = len(stats)
+        group_counts = stats["count"]
+        group_means = stats["mean"]
+
+        # Method-of-moments estimate of between-group variance τ²
+        # τ² = Var(group_means) - E(within_var / n)
+        grand_var = float(group_means.var(ddof=1)) if n_groups > 1 else 0.0
+        avg_within_var = float(
+            (stats["var"].fillna(0) / group_counts.clip(lower=1)).mean()
+        )
+        tau_sq = max(grand_var - avg_within_var, 1e-8)
+
+        # Adaptive shrinkage: precision_prior = 1/τ²
+        precision_prior = 1.0 / tau_sq
+        shrunk = (group_counts * group_means + precision_prior * global_mean) / (
+            group_counts + precision_prior
+        )
+        result[col_name] = (shrunk, global_mean)
+    return result
+
+
 def _add_shared_features(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     """Add engineered features shared across all model modes.
 
@@ -150,6 +205,7 @@ def build_features(
     cat_cols_low: list[str] = cfg["features"]["cat_cols_low"]
     classes: list[int] = cfg["features"]["classes"]
     smoothing: float = cfg["features"]["target_encoding"]["smoothing"]
+    encoding_method: str = cfg["features"].get("encoding_method", "manual_te")
 
     # -- Shared feature engineering (no leakage, no target info) --
     tr = _add_shared_features(df_train, cfg)
@@ -157,15 +213,24 @@ def build_features(
     te = _add_shared_features(df_test, cfg) if df_test is not None else None
 
     if mode == "lgb_xgb":
-        # -- Target-encode geo columns --
-        encoders: dict[str, dict] = {}
-        for geo_col in geo_cols:
-            enc = _fit_target_encoder(tr, geo_col, target_col, classes, smoothing)
-            encoders[geo_col] = enc
-            tr = _apply_target_encoder(tr, geo_col, enc)
-            va = _apply_target_encoder(va, geo_col, enc)
-            if te is not None:
-                te = _apply_target_encoder(te, geo_col, enc)
+        if encoding_method == "glmm":
+            # -- Empirical Bayes encoding (GLMM-style adaptive shrinkage) --
+            for geo_col in geo_cols:
+                enc = _fit_empirical_bayes_encoder(tr, geo_col, target_col, classes)
+                tr = _apply_target_encoder(tr, geo_col, enc)
+                va = _apply_target_encoder(va, geo_col, enc)
+                if te is not None:
+                    te = _apply_target_encoder(te, geo_col, enc)
+        else:
+            # -- Manual smoothed target encoding (original approach) --
+            encoders: dict[str, dict] = {}
+            for geo_col in geo_cols:
+                enc = _fit_target_encoder(tr, geo_col, target_col, classes, smoothing)
+                encoders[geo_col] = enc
+                tr = _apply_target_encoder(tr, geo_col, enc)
+                va = _apply_target_encoder(va, geo_col, enc)
+                if te is not None:
+                    te = _apply_target_encoder(te, geo_col, enc)
 
         # Interaction: age × geo_level_2 class-2 encoding (high-damage zones × age)
         geo2_k2_col = "geo_level_2_id_te_k2"

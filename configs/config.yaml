@@ -50,8 +50,9 @@ features:
     - has_secondary_use_gov_office
     - has_secondary_use_use_police
     - has_secondary_use_other
+  encoding_method: glmm  # "glmm" or "manual_te"
   target_encoding:
-    smoothing: 10.0    # additive smoothing weight toward global mean
+    smoothing: 10.0    # additive smoothing weight toward global mean (used only if encoding_method=manual_te)
   classes:
     - 1
     - 2
