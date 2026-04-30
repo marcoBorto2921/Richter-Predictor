@@ -33,6 +33,7 @@ import pandas as pd
 import yaml
 from catboost import CatBoostClassifier
 from lightgbm import LGBMClassifier, early_stopping, log_evaluation
+from sklearn.ensemble import ExtraTreesClassifier
 from sklearn.metrics import f1_score
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from xgboost import XGBClassifier
@@ -96,6 +97,10 @@ def _make_cat(params: dict, cat_cols: list[str]) -> CatBoostClassifier:
         cat_features=cat_cols if cat_cols else None,
         **params,
     )
+
+
+def _make_et(params: dict) -> ExtraTreesClassifier:
+    return ExtraTreesClassifier(**params)
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +184,20 @@ def _train_cat(
     return model, best_iter
 
 
+def _train_et(
+    X_train: pd.DataFrame,
+    y_train: np.ndarray,
+    params: dict,
+) -> tuple[ExtraTreesClassifier, int]:
+    """Train ExtraTrees. No early stopping — single-shot bagging.
+
+    Returns (model, n_estimators) for API consistency.
+    """
+    model = _make_et(params)
+    model.fit(X_train, y_train)
+    return model, params.get("n_estimators", 500)
+
+
 def train_model(
     model_name: str,
     X_train: pd.DataFrame,
@@ -211,6 +230,8 @@ def train_model(
         return _train_xgb(X_train, y_train, X_val, y_val, p, n_classes)
     elif model_name == "cat":
         return _train_cat(X_train, y_train, X_val, y_val, p, cat_cols)
+    elif model_name == "et":
+        return _train_et(X_train, y_train, p)
     else:
         raise ValueError(f"Unknown model: {model_name!r}")
 
@@ -256,6 +277,10 @@ def refit_model(
         p.pop("iterations", None)
         model = _make_cat({**p, "iterations": best_iter}, cat_cols)
         model.fit(X_combined, y_combined, verbose=False)
+
+    elif model_name == "et":
+        model = _make_et(p)
+        model.fit(X_combined, y_combined)
 
     else:
         raise ValueError(f"Unknown model: {model_name!r}")
@@ -322,6 +347,7 @@ def _xgb_objective(
         "n_estimators": n_est_ceiling,
         "early_stopping_rounds": es_rounds,
         "tree_method": "hist",
+        "device": "cuda",
         "verbosity": 0,
         "random_state": seed,
     }
@@ -788,9 +814,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model",
         type=str,
-        choices=["lgb", "xgb", "cat"],
+        choices=["lgb", "xgb", "cat", "et"],
         required=True,
-        help="Model to train: lgb, xgb, or cat",
+        help="Model to train: lgb, xgb, cat, or et",
     )
     parser.add_argument(
         "--no-optuna",

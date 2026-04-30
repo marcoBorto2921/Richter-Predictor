@@ -22,7 +22,9 @@ import numpy as np
 import pandas as pd
 import yaml
 from scipy.optimize import minimize
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import f1_score
+from sklearn.model_selection import StratifiedKFold
 
 from utils.seed import set_global_seed
 
@@ -86,6 +88,70 @@ def optimize_weights(
 
 
 # ---------------------------------------------------------------------------
+# Stacking meta-learner
+# ---------------------------------------------------------------------------
+
+
+def stacking_ensemble(
+    val_probas: list[np.ndarray],
+    y_val: np.ndarray,
+    test_probas: list[np.ndarray],
+    seed: int,
+    n_splits: int = 5,
+) -> tuple[np.ndarray, np.ndarray, float]:
+    """Train a stacking meta-learner on OOF probabilities.
+
+    Stacks all model probabilities horizontally (n_models * n_classes features),
+    trains LogisticRegression with internal CV to avoid overfitting on the
+    same OOF predictions used for weight optimization.
+
+    Args:
+        val_probas: List of (n_val, n_classes) OOF probability arrays.
+        y_val: True validation labels (0-indexed).
+        test_probas: List of (n_test, n_classes) test probability arrays.
+        seed: Random seed.
+        n_splits: Number of CV folds for meta-learner training.
+
+    Returns:
+        Tuple of (val_meta_proba, test_meta_proba, oof_f1_micro).
+    """
+    # Stack: (n_samples, n_models * n_classes)
+    X_meta_val = np.hstack(val_probas)
+    X_meta_test = np.hstack(test_probas)
+
+    n_samples = len(y_val)
+    n_classes = val_probas[0].shape[1]
+
+    # Internal CV to get unbiased OOF predictions from meta-learner
+    oof_meta = np.zeros((n_samples, n_classes), dtype=np.float64)
+    test_meta_accum = np.zeros((X_meta_test.shape[0], n_classes), dtype=np.float64)
+
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+
+    for fold_idx, (tr_idx, va_idx) in enumerate(skf.split(X_meta_val, y_val)):
+        X_tr, X_va = X_meta_val[tr_idx], X_meta_val[va_idx]
+        y_tr = y_val[tr_idx]
+
+        lr = LogisticRegression(
+            C=1.0, max_iter=1000, solver="lbfgs", random_state=seed
+        )
+        lr.fit(X_tr, y_tr)
+
+        oof_meta[va_idx] = lr.predict_proba(X_va)
+        test_meta_accum += lr.predict_proba(X_meta_test)
+
+        fold_preds = np.argmax(oof_meta[va_idx], axis=1)
+        fold_f1 = f1_score(y_val[va_idx], fold_preds, average="micro")
+        print(f"  Stacking fold {fold_idx + 1}/{n_splits}: F1={fold_f1:.4f}")
+
+    test_meta = test_meta_accum / n_splits
+    oof_preds = np.argmax(oof_meta, axis=1)
+    oof_f1 = f1_score(y_val, oof_preds, average="micro")
+
+    return oof_meta, test_meta, oof_f1
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -106,6 +172,12 @@ def parse_args() -> argparse.Namespace:
         nargs="+",
         default=None,
         help="Models to ensemble (default: from config ensemble.models_order)",
+    )
+    parser.add_argument(
+        "--method",
+        choices=["weighted_avg", "stacking"],
+        default="weighted_avg",
+        help="Ensemble method: weighted_avg (Nelder-Mead) or stacking (LogisticRegression)",
     )
     return parser.parse_args()
 
@@ -172,26 +244,38 @@ def main() -> None:
     f1_equal = f1_score(y_val, np.argmax(blended_equal, axis=1), average="micro")
     print(f"\nEqual-weight ensemble F1-micro: {f1_equal:.4f}")
 
-    # -- Optimize weights --
-    print("\nOptimizing ensemble weights (Nelder-Mead)...")
-    optimal_weights = optimize_weights(val_probas, y_val, initial_weights, cfg["seed"])
+    if args.method == "stacking":
+        # -- Stacking meta-learner --
+        print("\nTraining stacking meta-learner (LogisticRegression, 5-fold CV)...")
+        _, test_blend, f1_opt = stacking_ensemble(
+            val_probas, y_val, test_probas, cfg["seed"]
+        )
+        print(f"Stacking OOF F1-micro: {f1_opt:.4f}")
+        method_tag = "stacking"
+    else:
+        # -- Optimize weights (Nelder-Mead) --
+        print("\nOptimizing ensemble weights (Nelder-Mead)...")
+        optimal_weights = optimize_weights(
+            val_probas, y_val, initial_weights, cfg["seed"]
+        )
 
-    blended_opt = _blend_proba(val_probas, optimal_weights)
-    f1_opt = f1_score(y_val, np.argmax(blended_opt, axis=1), average="micro")
+        blended_opt = _blend_proba(val_probas, optimal_weights)
+        f1_opt = f1_score(y_val, np.argmax(blended_opt, axis=1), average="micro")
 
-    print("Optimal weights:")
-    for name, w in zip(models_order, optimal_weights):
-        print(f"  {name}: {w:.4f}")
-    print(f"Optimized ensemble F1-micro: {f1_opt:.4f}")
+        print("Optimal weights:")
+        for name, w in zip(models_order, optimal_weights):
+            print(f"  {name}: {w:.4f}")
+        print(f"Optimized ensemble F1-micro: {f1_opt:.4f}")
+        test_blend = _blend_proba(test_probas, optimal_weights)
+        method_tag = "wavg"
 
     # -- Generate submission --
     print("\nGenerating submission...")
-    test_blend = _blend_proba(test_probas, optimal_weights)
     damage_grade = np.argmax(test_blend, axis=1) + 1  # convert 0-indexed back to 1,2,3
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     models_tag = "_".join(models_order)
-    filename = f"{timestamp}_{models_tag}_f1micro_{f1_opt:.4f}.csv"
+    filename = f"{timestamp}_{models_tag}_{method_tag}_f1micro_{f1_opt:.4f}.csv"
     submission_path = submissions_dir / filename
 
     submission = pd.DataFrame({"building_id": test_ids, "damage_grade": damage_grade})

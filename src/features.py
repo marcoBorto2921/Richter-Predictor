@@ -130,6 +130,43 @@ def _fit_empirical_bayes_encoder(
     return result
 
 
+def _replace_rare_categories(
+    df_train: pd.DataFrame,
+    df_val: pd.DataFrame,
+    df_test: pd.DataFrame | None,
+    geo_cols: list[str],
+    threshold: int,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame | None]:
+    """Replace rare geo categories (freq < threshold in train) with 'rare' sentinel.
+
+    Fitted on df_train frequencies only — df_val and df_test values not in the
+    frequent set are also mapped to 'rare' (handles unseen categories too).
+
+    Args:
+        df_train: Training DataFrame.
+        df_val: Validation DataFrame.
+        df_test: Test DataFrame (may be None).
+        geo_cols: List of geo column names.
+        threshold: Minimum frequency to keep a category.
+
+    Returns:
+        Tuple of (df_train, df_val, df_test) with rare categories replaced.
+    """
+    tr = df_train.copy()
+    va = df_val.copy()
+    te = df_test.copy() if df_test is not None else None
+
+    for col in geo_cols:
+        freq = tr[col].value_counts()
+        frequent = set(freq[freq >= threshold].index)
+        tr.loc[:, col] = tr[col].where(tr[col].isin(frequent), other=-1)
+        va.loc[:, col] = va[col].where(va[col].isin(frequent), other=-1)
+        if te is not None:
+            te.loc[:, col] = te[col].where(te[col].isin(frequent), other=-1)
+
+    return tr, va, te
+
+
 def _add_shared_features(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     """Add engineered features shared across all model modes.
 
@@ -160,6 +197,7 @@ def _add_shared_features(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     )
     out.loc[:, "floors_ge3"] = (out["count_floors_pre_eq"] >= 3).astype(np.int8)
     out.loc[:, "age_x_area"] = out["age"] * out["area_percentage"]
+
     return out
 
 
@@ -210,6 +248,13 @@ def build_features(
     classes: list[int] = cfg["features"]["classes"]
     smoothing: float = cfg["features"]["target_encoding"]["smoothing"]
     encoding_method: str = cfg["features"].get("encoding_method", "manual_te")
+
+    # -- Replace rare geo categories (fitted on train freq only) --
+    rare_threshold: int = cfg["features"].get("rare_threshold", 0)
+    if rare_threshold > 0:
+        df_train, df_val, df_test = _replace_rare_categories(
+            df_train, df_val, df_test, geo_cols, rare_threshold
+        )
 
     # -- Shared feature engineering (no leakage, no target info) --
     tr = _add_shared_features(df_train, cfg)

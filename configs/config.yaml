@@ -55,6 +55,7 @@ features:
     - has_secondary_use_use_police
     - has_secondary_use_other
   encoding_method: glmm  # "glmm" or "manual_te"
+  rare_threshold: 3      # geo categories with freq < this in train fold → "rare" sentinel
   target_encoding:
     smoothing: 10.0    # additive smoothing weight toward global mean (used only if encoding_method=manual_te)
   classes:
@@ -91,6 +92,7 @@ models:
     n_estimators: 3000
     early_stopping_rounds: 100
     tree_method: hist
+    device: cuda
     verbosity: 0
     random_state: 42
 
@@ -101,13 +103,23 @@ models:
     learning_rate: 0.05
     bagging_temperature: 0.5
     random_strength: 1.0
-    iterations: 1000
-    early_stopping_rounds: 30
+    iterations: 1500
+    early_stopping_rounds: 50
+    # task_type: GPU  # DISABLED — GPU uses different cat encoding (Borders vs Ordered), drops from 0.7489 to 0.7404
     verbose: 0
     random_state: 42
 
+  et:
+    n_estimators: 1000
+    max_depth: 25
+    min_samples_split: 5
+    min_samples_leaf: 2
+    max_features: sqrt
+    n_jobs: -1
+    random_state: 42
+
 optuna:
-  n_trials: 50
+  n_trials: 100
   direction: maximize     # maximize F1-micro
   timeout: null           # no wall-clock limit
   show_progress_bar: true
@@ -118,13 +130,15 @@ optuna:
 ensemble:
   # Initial weight guess: [lgb, cat, xgb] — must sum to 1
   initial_weights:
-    - 0.4
-    - 0.35
-    - 0.25
+    - 0.3
+    - 0.3
+    - 0.2
+    - 0.2
   models_order:
     - lgb
     - cat
     - xgb
+    - et
 
 output:
   models_dir: models/
