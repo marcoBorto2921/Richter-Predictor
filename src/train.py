@@ -386,6 +386,30 @@ def _cat_objective(
     return f1
 
 
+def _et_objective(
+    trial: optuna.Trial,
+    X_train: pd.DataFrame,
+    y_train: np.ndarray,
+    X_val: pd.DataFrame,
+    y_val: np.ndarray,
+    seed: int,
+) -> float:
+    params = {
+        "n_estimators": trial.suggest_int("n_estimators", 500, 2000),
+        "max_depth": trial.suggest_int("max_depth", 15, 40),
+        "min_samples_split": trial.suggest_int("min_samples_split", 2, 20),
+        "min_samples_leaf": trial.suggest_int("min_samples_leaf", 1, 10),
+        "max_features": trial.suggest_categorical("max_features", ["sqrt", "log2", 0.3, 0.5, 0.7]),
+        "n_jobs": -1,
+        "random_state": seed,
+    }
+    model = _make_et(params)
+    model.fit(X_train, y_train)
+    trial.set_user_attr("best_iter", params["n_estimators"])
+    preds = model.predict(X_val)
+    return f1_score(y_val, preds, average="micro")
+
+
 def run_optuna(
     model_name: str,
     X_train: pd.DataFrame,
@@ -465,6 +489,18 @@ def run_optuna(
                 seed,
                 n_est_ceiling,
                 es_rounds,
+            )
+
+    elif model_name == "et":
+
+        def obj(trial: optuna.Trial) -> float:
+            return _et_objective(
+                trial,
+                X_train,
+                y_train,
+                X_val,
+                y_val,
+                seed,
             )
 
     else:
