@@ -118,6 +118,16 @@ models:
     n_jobs: -1
     random_state: 42
 
+  rf:
+    n_estimators: 1000
+    max_depth: 25
+    min_samples_split: 5
+    min_samples_leaf: 2
+    max_features: sqrt
+    bootstrap: true
+    n_jobs: -1
+    random_state: 42
+
 optuna:
   n_trials: 100
   n_trials_et: 40          # ET has no early stopping — each trial is slower; fewer trials suffice
@@ -129,17 +139,19 @@ optuna:
   best_iter_fallback: 500      # fallback best_iter if trial user_attr is missing (should never occur)
 
 ensemble:
-  # Initial weight guess: [lgb, cat, xgb] — must sum to 1
+  # Initial weight guess — must sum to 1
   initial_weights:
-    - 0.3
-    - 0.3
-    - 0.2
-    - 0.2
+    - 0.25
+    - 0.25
+    - 0.20
+    - 0.15
+    - 0.15
   models_order:
     - lgb
     - cat
     - xgb
     - et
+    - rf
 
 output:
   models_dir: models/

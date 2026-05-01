@@ -33,7 +33,7 @@ import pandas as pd
 import yaml
 from catboost import CatBoostClassifier
 from lightgbm import LGBMClassifier, early_stopping, log_evaluation
-from sklearn.ensemble import ExtraTreesClassifier
+from sklearn.ensemble import ExtraTreesClassifier, RandomForestClassifier
 from sklearn.metrics import f1_score
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from xgboost import XGBClassifier
@@ -101,6 +101,10 @@ def _make_cat(params: dict, cat_cols: list[str]) -> CatBoostClassifier:
 
 def _make_et(params: dict) -> ExtraTreesClassifier:
     return ExtraTreesClassifier(**params)
+
+
+def _make_rf(params: dict) -> RandomForestClassifier:
+    return RandomForestClassifier(**params)
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +202,20 @@ def _train_et(
     return model, params.get("n_estimators", 500)
 
 
+def _train_rf(
+    X_train: pd.DataFrame,
+    y_train: np.ndarray,
+    params: dict,
+) -> tuple[RandomForestClassifier, int]:
+    """Train RandomForest. No early stopping — single-shot bagging.
+
+    Returns (model, n_estimators) for API consistency.
+    """
+    model = _make_rf(params)
+    model.fit(X_train, y_train)
+    return model, params.get("n_estimators", 500)
+
+
 def train_model(
     model_name: str,
     X_train: pd.DataFrame,
@@ -211,7 +229,7 @@ def train_model(
     """Dispatch training to the correct model backend.
 
     Args:
-        model_name: "lgb", "xgb", "cat", or "et".
+        model_name: "lgb", "xgb", "cat", "et", or "rf".
         X_train: Training features.
         y_train: Training labels (0-indexed: 0, 1, 2).
         X_val: Validation features.
@@ -232,6 +250,8 @@ def train_model(
         return _train_cat(X_train, y_train, X_val, y_val, p, cat_cols)
     elif model_name == "et":
         return _train_et(X_train, y_train, p)
+    elif model_name == "rf":
+        return _train_rf(X_train, y_train, p)
     else:
         raise ValueError(f"Unknown model: {model_name!r}")
 
@@ -250,7 +270,7 @@ def refit_model(
     No early stopping — n_estimators/iterations set to best_iter directly.
 
     Args:
-        model_name: "lgb", "xgb", "cat", or "et".
+        model_name: "lgb", "xgb", "cat", "et", or "rf".
         X_combined: Full training features.
         y_combined: Full training labels (0-indexed).
         params: Best hyperparameter dict from Optuna (without early_stopping_rounds).
@@ -280,6 +300,10 @@ def refit_model(
 
     elif model_name == "et":
         model = _make_et(p)
+        model.fit(X_combined, y_combined)
+
+    elif model_name == "rf":
+        model = _make_rf(p)
         model.fit(X_combined, y_combined)
 
     else:
@@ -428,7 +452,7 @@ def run_optuna(
     """Run Optuna HPO study. Returns (best_params, best_iter).
 
     Args:
-        model_name: "lgb", "xgb", "cat", or "et".
+        model_name: "lgb", "xgb", "cat", "et", or "rf".
         X_train: Training features.
         y_train: Training labels (0-indexed).
         X_val: Validation features.
@@ -510,6 +534,11 @@ def run_optuna(
                 n_estimators=et_n_estimators,
             )
 
+    elif model_name == "rf":
+        raise ValueError(
+            "RandomForest has no Optuna objective. Use --no-optuna with --model rf."
+        )
+
     else:
         raise ValueError(f"Unknown model: {model_name!r}")
 
@@ -545,7 +574,7 @@ def predict_proba(model_name: str, model: object, X: pd.DataFrame) -> np.ndarray
     """Get class probabilities. Returns array of shape (n_samples, n_classes).
 
     Args:
-        model_name: "lgb", "xgb", "cat", or "et".
+        model_name: "lgb", "xgb", "cat", "et", or "rf".
         model: Fitted model.
         X: Feature matrix.
 
@@ -576,7 +605,7 @@ def train_kfold(
     Test predictions are averaged across folds.
 
     Args:
-        model_name: "lgb", "xgb", "cat", or "et".
+        model_name: "lgb", "xgb", "cat", "et", or "rf".
         df_train_full: Full training DataFrame with target column.
         df_test: Test DataFrame (no target).
         y_all: Full target array (0-indexed).
@@ -652,8 +681,8 @@ def train_kfold(
                 train_params["early_stopping_rounds"] = model_cfg[
                     "early_stopping_rounds"
                 ]
-            elif model_name == "et":
-                # ET uses n_estimators (fixed during Optuna); no early stopping
+            elif model_name in ("et", "rf"):
+                # ET/RF use n_estimators (fixed during Optuna); no early stopping
                 train_params["n_estimators"] = model_cfg["n_estimators"]
                 train_params.setdefault("n_jobs", -1)
             else:
@@ -816,7 +845,7 @@ def train_holdout(
     if model_name in ("lgb", "xgb"):
         eval_params["n_estimators"] = model_cfg["n_estimators"]
         eval_params["early_stopping_rounds"] = model_cfg["early_stopping_rounds"]
-    elif model_name == "et":
+    elif model_name in ("et", "rf"):
         eval_params["n_estimators"] = model_cfg["n_estimators"]
         eval_params.setdefault("n_jobs", -1)
     else:
@@ -878,9 +907,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model",
         type=str,
-        choices=["lgb", "xgb", "cat", "et"],
+        choices=["lgb", "xgb", "cat", "et", "rf"],
         required=True,
-        help="Model to train: lgb, xgb, cat, or et",
+        help="Model to train: lgb, xgb, cat, et, or rf",
     )
     parser.add_argument(
         "--no-optuna",
