@@ -9,6 +9,9 @@ Target encoding is always fitted on the train fold only (no leakage).
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import joblib
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import LabelEncoder
@@ -201,6 +204,58 @@ def _add_shared_features(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     return out
 
 
+def _apply_geo_embeddings(
+    tr: pd.DataFrame,
+    va: pd.DataFrame,
+    te: pd.DataFrame | None,
+    cfg: dict,
+    models_dir: Path,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame | None]:
+    """Append pre-trained geo entity embedding features to dataframes.
+
+    Loads embedding matrices (geo_emb_*.npy) and LabelEncoders (geo_enc_*.pkl)
+    saved by src/geo_embeddings.py. Each geo_level_* column is looked up in the
+    embedding matrix and expanded to `dim` float columns named
+    `{col}_emb_0`, `{col}_emb_1`, ..., `{col}_emb_{dim-1}`.
+
+    Unseen / rare IDs (including ThresholdReplacer -1 sentinel) map to the
+    UNKNOWN embedding at index 0 (zero-initialized, never trained).
+
+    Args:
+        tr: Training DataFrame (must still contain raw geo_level_* columns).
+        va: Validation DataFrame.
+        te: Test DataFrame (may be None).
+        cfg: Config dict.
+        models_dir: Directory containing geo_emb_*.npy and geo_enc_*.pkl artifacts.
+
+    Returns:
+        Tuple of (tr, va, te) with embedding columns appended in-place.
+    """
+    geo_cols: list[str] = cfg["features"]["geo_cols"]
+
+    for col in geo_cols:
+        tag = col.replace("geo_level_", "").replace("_id", "")
+        emb_matrix: np.ndarray = np.load(
+            models_dir / f"geo_emb_{tag}.npy"
+        )  # (vocab+1, dim)
+        le: LabelEncoder = joblib.load(models_dir / f"geo_enc_{tag}.pkl")
+        known: set[str] = set(le.classes_)
+        dim: int = emb_matrix.shape[1]
+
+        frames = [tr, va] + ([te] if te is not None else [])
+        for frame in frames:
+            raw = frame[col].astype(str).values
+            indices = np.zeros(len(raw), dtype=np.int64)  # default: UNKNOWN_IDX=0
+            mask = np.array([v in known for v in raw])
+            if mask.any():
+                indices[mask] = le.transform(raw[mask]) + 1  # shift known → 1..N
+            emb_vecs: np.ndarray = emb_matrix[indices]  # (n, dim)
+            for d in range(dim):
+                frame.loc[:, f"{col}_emb_{d}"] = emb_vecs[:, d].astype(np.float32)
+
+    return tr, va, te
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -219,6 +274,7 @@ def build_features(
         - geo_level_* are target-encoded (9 new float cols, originals dropped).
         - Low-cardinality categoricals are label-encoded to integers.
         - Interaction feature age_x_geo2_damage (age * geo_level_2 damage encoding) added.
+        - Optional: geo entity embedding columns appended (config-gated).
 
     For "catboost" mode:
         - All categoricals (geo + low-card) are kept as-is.
@@ -287,6 +343,12 @@ def build_features(
         va.loc[:, "age_x_geo2_damage"] = va["age"] * va[geo2_k2_col]
         if te is not None:
             te.loc[:, "age_x_geo2_damage"] = te["age"] * te[geo2_k2_col]
+
+        # -- Optional: geo entity embedding features (LGB/XGB only) --
+        emb_cfg = cfg["features"].get("geo_embedding", {})
+        if emb_cfg.get("enabled", False):
+            models_dir = Path(cfg["output"]["models_dir"])
+            tr, va, te = _apply_geo_embeddings(tr, va, te, cfg, models_dir)
 
         # -- Label-encode low-cardinality categoricals --
         le_map: dict[str, LabelEncoder] = {}

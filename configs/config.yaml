@@ -62,6 +62,17 @@ features:
     - 1
     - 2
     - 3
+  geo_embedding:
+    enabled: false   # set to true after running: python src/geo_embeddings.py
+    dims:
+      geo_level_1_id: 8
+      geo_level_2_id: 16
+      geo_level_3_id: 32
+    epochs: 30
+    batch_size: 2048
+    learning_rate: 0.001
+    dropout: 0.3
+    hidden_sizes: [128, 64]
 
 models:
   lgb:

@@ -10,6 +10,9 @@ numpy==2.4.4
 pandas==2.2.2
 scipy==1.17.1
 
+# Neural embeddings
+torch==2.11.0+cpu  # CPU-only build; install via: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
 # Serialization & config
 joblib==1.5.3
 pyyaml==6.0.3
