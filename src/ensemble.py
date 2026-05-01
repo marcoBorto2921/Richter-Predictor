@@ -132,9 +132,7 @@ def stacking_ensemble(
         X_tr, X_va = X_meta_val[tr_idx], X_meta_val[va_idx]
         y_tr = y_val[tr_idx]
 
-        lr = LogisticRegression(
-            C=1.0, max_iter=1000, solver="lbfgs", random_state=seed
-        )
+        lr = LogisticRegression(C=1.0, max_iter=1000, solver="lbfgs", random_state=seed)
         lr.fit(X_tr, y_tr)
 
         oof_meta[va_idx] = lr.predict_proba(X_va)
