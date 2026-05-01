@@ -88,6 +88,73 @@ def optimize_weights(
 
 
 # ---------------------------------------------------------------------------
+# Threshold optimization
+# ---------------------------------------------------------------------------
+
+
+def _apply_thresholds(proba: np.ndarray, t0: float, t2: float) -> np.ndarray:
+    """Apply per-class thresholds to probability array.
+
+    Rule: predict class 0 if P(0) > t0; predict class 2 if P(2) > t2; else class 1.
+    When both class 0 and class 2 exceed their thresholds, pick the higher probability.
+
+    Args:
+        proba: (n_samples, 3) probability array.
+        t0: Threshold for class 0 (low damage).
+        t2: Threshold for class 2 (near-total destruction).
+
+    Returns:
+        Integer prediction array (0-indexed).
+    """
+    preds = np.ones(len(proba), dtype=int)  # default: class 1 (medium damage)
+    above_0 = proba[:, 0] > t0
+    above_2 = proba[:, 2] > t2
+    both = above_0 & above_2
+    preds[above_0 & ~both] = 0
+    preds[above_2 & ~both] = 2
+    preds[both] = np.where(proba[both, 0] > proba[both, 2], 0, 2)
+    return preds
+
+
+def optimize_thresholds(
+    val_proba: np.ndarray,
+    y_val: np.ndarray,
+    seed: int,
+) -> tuple[float, float, float]:
+    """Find optimal thresholds for class 0 and class 2 to maximize F1-micro.
+
+    Searches [t0, t2] via Nelder-Mead. Class 1 is the default (majority class).
+    Minority classes 0 and 3 (1-indexed) benefit from explicit threshold tuning.
+
+    Args:
+        val_proba: (n_samples, 3) probability array (OOF or val).
+        y_val: True labels (0-indexed).
+        seed: Random seed.
+
+    Returns:
+        Tuple of (t0, t2, best_f1_micro).
+    """
+    np.random.seed(seed)
+
+    def neg_f1(thresholds: np.ndarray) -> float:
+        t0, t2 = float(thresholds[0]), float(thresholds[1])
+        preds = _apply_thresholds(val_proba, t0, t2)
+        return -f1_score(y_val, preds, average="micro")
+
+    # Start from argmax-equivalent: t0=t2=0.5 isn't right for 3 classes.
+    # A neutral start is 1/3 (uniform prior), but let Nelder-Mead explore freely.
+    result = minimize(
+        neg_f1,
+        x0=np.array([1 / 3, 1 / 3]),
+        method="Nelder-Mead",
+        options={"maxiter": 5000, "xatol": 1e-6, "fatol": 1e-6},
+    )
+    t0, t2 = float(result.x[0]), float(result.x[1])
+    best_f1 = -result.fun
+    return t0, t2, best_f1
+
+
+# ---------------------------------------------------------------------------
 # Stacking meta-learner
 # ---------------------------------------------------------------------------
 
@@ -177,6 +244,11 @@ def parse_args() -> argparse.Namespace:
         default="weighted_avg",
         help="Ensemble method: weighted_avg (Nelder-Mead) or stacking (LogisticRegression)",
     )
+    parser.add_argument(
+        "--post-threshold",
+        action="store_true",
+        help="After blending, optimize per-class thresholds (t0, t2) to maximize F1-micro",
+    )
     return parser.parse_args()
 
 
@@ -245,7 +317,7 @@ def main() -> None:
     if args.method == "stacking":
         # -- Stacking meta-learner --
         print("\nTraining stacking meta-learner (LogisticRegression, 5-fold CV)...")
-        _, test_blend, f1_opt = stacking_ensemble(
+        val_blend, test_blend, f1_opt = stacking_ensemble(
             val_probas, y_val, test_probas, cfg["seed"]
         )
         print(f"Stacking OOF F1-micro: {f1_opt:.4f}")
@@ -257,8 +329,8 @@ def main() -> None:
             val_probas, y_val, initial_weights, cfg["seed"]
         )
 
-        blended_opt = _blend_proba(val_probas, optimal_weights)
-        f1_opt = f1_score(y_val, np.argmax(blended_opt, axis=1), average="micro")
+        val_blend = _blend_proba(val_probas, optimal_weights)
+        f1_opt = f1_score(y_val, np.argmax(val_blend, axis=1), average="micro")
 
         print("Optimal weights:")
         for name, w in zip(models_order, optimal_weights):
@@ -267,9 +339,25 @@ def main() -> None:
         test_blend = _blend_proba(test_probas, optimal_weights)
         method_tag = "wavg"
 
+    # -- Optional: threshold optimization --
+    if args.post_threshold:
+        print("\nOptimizing class thresholds (t0, t2)...")
+        t0, t2, f1_thresh = optimize_thresholds(val_blend, y_val, cfg["seed"])
+        gain = f1_thresh - f1_opt
+        print(f"  t0 (class 1 / low damage):          {t0:.4f}")
+        print(f"  t2 (class 3 / near-total):          {t2:.4f}")
+        print(
+            f"  F1-micro with thresholds:           {f1_thresh:.4f} ({gain:+.4f} vs argmax)"
+        )
+        method_tag += "_thresh"
+        f1_opt = f1_thresh
+        test_preds = _apply_thresholds(test_blend, t0, t2)
+    else:
+        test_preds = np.argmax(test_blend, axis=1)
+
     # -- Generate submission --
     print("\nGenerating submission...")
-    damage_grade = np.argmax(test_blend, axis=1) + 1  # convert 0-indexed back to 1,2,3
+    damage_grade = test_preds + 1  # convert 0-indexed back to 1,2,3
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     models_tag = "_".join(models_order)
