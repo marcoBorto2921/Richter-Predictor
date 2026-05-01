@@ -211,7 +211,7 @@ def train_model(
     """Dispatch training to the correct model backend.
 
     Args:
-        model_name: "lgb", "xgb", or "cat".
+        model_name: "lgb", "xgb", "cat", or "et".
         X_train: Training features.
         y_train: Training labels (0-indexed: 0, 1, 2).
         X_val: Validation features.
@@ -250,7 +250,7 @@ def refit_model(
     No early stopping — n_estimators/iterations set to best_iter directly.
 
     Args:
-        model_name: "lgb", "xgb", or "cat".
+        model_name: "lgb", "xgb", "cat", or "et".
         X_combined: Full training features.
         y_combined: Full training labels (0-indexed).
         params: Best hyperparameter dict from Optuna (without early_stopping_rounds).
@@ -393,19 +393,24 @@ def _et_objective(
     X_val: pd.DataFrame,
     y_val: np.ndarray,
     seed: int,
+    n_estimators: int = 1000,
 ) -> float:
+    # n_estimators fixed — not a key lever for ET; searching it only inflates trial time.
+    # Focus search on structural hyperparameters that most affect bias/variance.
     params = {
-        "n_estimators": trial.suggest_int("n_estimators", 500, 2000),
-        "max_depth": trial.suggest_int("max_depth", 15, 40),
-        "min_samples_split": trial.suggest_int("min_samples_split", 2, 20),
-        "min_samples_leaf": trial.suggest_int("min_samples_leaf", 1, 10),
-        "max_features": trial.suggest_categorical("max_features", ["sqrt", "log2", 0.3, 0.5, 0.7]),
+        "n_estimators": n_estimators,
+        "max_depth": trial.suggest_int("max_depth", 10, 45),
+        "min_samples_split": trial.suggest_int("min_samples_split", 2, 30),
+        "min_samples_leaf": trial.suggest_int("min_samples_leaf", 1, 15),
+        "max_features": trial.suggest_categorical(
+            "max_features", ["sqrt", "log2", 0.3, 0.5, 0.7]
+        ),
         "n_jobs": -1,
         "random_state": seed,
     }
     model = _make_et(params)
     model.fit(X_train, y_train)
-    trial.set_user_attr("best_iter", params["n_estimators"])
+    trial.set_user_attr("best_iter", n_estimators)
     preds = model.predict(X_val)
     return f1_score(y_val, preds, average="micro")
 
@@ -423,7 +428,7 @@ def run_optuna(
     """Run Optuna HPO study. Returns (best_params, best_iter).
 
     Args:
-        model_name: "lgb", "xgb", or "cat".
+        model_name: "lgb", "xgb", "cat", or "et".
         X_train: Training features.
         y_train: Training labels (0-indexed).
         X_val: Validation features.
@@ -492,6 +497,7 @@ def run_optuna(
             )
 
     elif model_name == "et":
+        et_n_estimators = cfg["models"]["et"]["n_estimators"]
 
         def obj(trial: optuna.Trial) -> float:
             return _et_objective(
@@ -501,14 +507,20 @@ def run_optuna(
                 X_val,
                 y_val,
                 seed,
+                n_estimators=et_n_estimators,
             )
 
     else:
         raise ValueError(f"Unknown model: {model_name!r}")
 
+    n_trials = (
+        optuna_cfg.get("n_trials_et", optuna_cfg["n_trials"])
+        if model_name == "et"
+        else optuna_cfg["n_trials"]
+    )
     study.optimize(
         obj,
-        n_trials=optuna_cfg["n_trials"],
+        n_trials=n_trials,
         timeout=optuna_cfg.get("timeout"),
         show_progress_bar=optuna_cfg.get("show_progress_bar", True),
     )
@@ -533,7 +545,7 @@ def predict_proba(model_name: str, model: object, X: pd.DataFrame) -> np.ndarray
     """Get class probabilities. Returns array of shape (n_samples, n_classes).
 
     Args:
-        model_name: "lgb", "xgb", or "cat".
+        model_name: "lgb", "xgb", "cat", or "et".
         model: Fitted model.
         X: Feature matrix.
 
@@ -564,7 +576,7 @@ def train_kfold(
     Test predictions are averaged across folds.
 
     Args:
-        model_name: "lgb", "xgb", or "cat".
+        model_name: "lgb", "xgb", "cat", or "et".
         df_train_full: Full training DataFrame with target column.
         df_test: Test DataFrame (no target).
         y_all: Full target array (0-indexed).
@@ -586,7 +598,6 @@ def train_kfold(
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=cfg["seed"])
 
     n_train = len(df_train_full)
-    n_test = len(df_test)
     oof_proba = np.zeros((n_train, n_classes), dtype=np.float64)
     test_proba_per_fold: list[np.ndarray] = []
     fold_f1_list: list[float] = []
@@ -617,10 +628,16 @@ def train_kfold(
 
         # Optuna on fold 0 only
         if fold_idx == 0 and use_optuna:
+            optuna_cfg = cfg["optuna"]
+            n_trials_display = (
+                optuna_cfg.get("n_trials_et", optuna_cfg["n_trials"])
+                if model_name == "et"
+                else optuna_cfg["n_trials"]
+            )
             logger.info(
                 "[%s] Running Optuna on fold 0 (%d trials)...",
                 model_name.upper(),
-                cfg["optuna"]["n_trials"],
+                n_trials_display,
             )
             best_params, _ = run_optuna(
                 model_name, X_train, y_train, X_val, y_val, cat_cols, cfg, n_classes
@@ -635,6 +652,10 @@ def train_kfold(
                 train_params["early_stopping_rounds"] = model_cfg[
                     "early_stopping_rounds"
                 ]
+            elif model_name == "et":
+                # ET uses n_estimators (fixed during Optuna); no early stopping
+                train_params["n_estimators"] = model_cfg["n_estimators"]
+                train_params.setdefault("n_jobs", -1)
             else:
                 train_params["iterations"] = model_cfg["iterations"]
                 train_params["early_stopping_rounds"] = model_cfg[
@@ -697,12 +718,16 @@ def train_kfold(
     oof_f1 = f1_score(y_all, oof_preds, average="micro")
 
     t_total = time.time() - t_start_all
-    print(f"\n[{model_name.upper()}] === K-Fold Summary ({t_total:.0f}s total) ===",
-          flush=True)
+    print(
+        f"\n[{model_name.upper()}] === K-Fold Summary ({t_total:.0f}s total) ===",
+        flush=True,
+    )
     for i, f1 in enumerate(fold_f1_list):
         print(f"  Fold {i + 1}: {f1:.4f}", flush=True)
-    print(f"  Mean fold F1: {np.mean(fold_f1_list):.4f} "
-          f"(+/- {np.std(fold_f1_list):.4f})", flush=True)
+    print(
+        f"  Mean fold F1: {np.mean(fold_f1_list):.4f} (+/- {np.std(fold_f1_list):.4f})",
+        flush=True,
+    )
     print(f"  OOF F1-micro: {oof_f1:.4f}", flush=True)
     print(f"  Fold weights: {[f'{w:.4f}' for w in fold_weights]}", flush=True)
     print(f"  Best iters: {best_iters}", flush=True)
@@ -791,6 +816,9 @@ def train_holdout(
     if model_name in ("lgb", "xgb"):
         eval_params["n_estimators"] = model_cfg["n_estimators"]
         eval_params["early_stopping_rounds"] = model_cfg["early_stopping_rounds"]
+    elif model_name == "et":
+        eval_params["n_estimators"] = model_cfg["n_estimators"]
+        eval_params.setdefault("n_jobs", -1)
     else:
         eval_params["iterations"] = model_cfg["iterations"]
         eval_params["early_stopping_rounds"] = model_cfg["early_stopping_rounds"]

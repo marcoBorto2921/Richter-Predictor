@@ -120,6 +120,7 @@ models:
 
 optuna:
   n_trials: 100
+  n_trials_et: 40          # ET has no early stopping — each trial is slower; fewer trials suffice
   direction: maximize     # maximize F1-micro
   timeout: null           # no wall-clock limit
   show_progress_bar: true
