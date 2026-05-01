@@ -650,9 +650,11 @@ def train_kfold(
         y_val = y_all[val_idx]
 
         # Feature engineering per fold (target encoding fitted on train fold only)
+        # ET/RF: use_embeddings=False — random feature subsampling dilutes embedding signal
         logger.info("[%s] Building features (mode=%s)...", model_name.upper(), mode)
+        use_emb = False if model_name in ("et", "rf") else None
         X_train, X_val, X_test, cat_cols = build_features(
-            df_tr, df_va, df_test, cfg, mode
+            df_tr, df_va, df_test, cfg, mode, use_embeddings=use_emb
         )
 
         # Optuna on fold 0 only
@@ -808,8 +810,12 @@ def train_holdout(
     y_val = y_all[idx_val]
 
     # Feature engineering
+    # ET/RF: use_embeddings=False — random feature subsampling dilutes embedding signal
     logger.info("[%s] Building features (mode=%s)...", model_name.upper(), mode)
-    X_train, X_val, X_test, cat_cols = build_features(df_tr, df_va, df_test, cfg, mode)
+    use_emb = False if model_name in ("et", "rf") else None
+    X_train, X_val, X_test, cat_cols = build_features(
+        df_tr, df_va, df_test, cfg, mode, use_embeddings=use_emb
+    )
 
     # Baseline train
     model_cfg = cfg["models"][model_name]

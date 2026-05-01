@@ -267,6 +267,7 @@ def build_features(
     df_test: pd.DataFrame | None,
     cfg: dict,
     mode: str = "lgb_xgb",
+    use_embeddings: bool | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame | None, list[str]]:
     """Build feature matrices for training, validation, and test sets.
 
@@ -274,7 +275,7 @@ def build_features(
         - geo_level_* are target-encoded (9 new float cols, originals dropped).
         - Low-cardinality categoricals are label-encoded to integers.
         - Interaction feature age_x_geo2_damage (age * geo_level_2 damage encoding) added.
-        - Optional: geo entity embedding columns appended (config-gated).
+        - Optional: geo entity embedding columns appended (config-gated or caller-gated).
 
     For "catboost" mode:
         - All categoricals (geo + low-card) are kept as-is.
@@ -290,6 +291,10 @@ def build_features(
         df_test: Test set with 39 features, no target column. May be None.
         cfg: Config dict loaded from config.yaml.
         mode: "lgb_xgb" or "catboost".
+        use_embeddings: Override for geo embedding application.
+            None (default) → read from cfg['features']['geo_embedding']['enabled'].
+            True/False → override config, regardless of config value.
+            Use False for ET/RF (random subsampling dilutes embedding signal).
 
     Returns:
         Tuple of (X_train, X_val, X_test_or_None, cat_cols).
@@ -344,9 +349,14 @@ def build_features(
         if te is not None:
             te.loc[:, "age_x_geo2_damage"] = te["age"] * te[geo2_k2_col]
 
-        # -- Optional: geo entity embedding features (LGB/XGB only) --
+        # -- Optional: geo entity embedding features --
         emb_cfg = cfg["features"].get("geo_embedding", {})
-        if emb_cfg.get("enabled", False):
+        emb_enabled = (
+            use_embeddings
+            if use_embeddings is not None
+            else emb_cfg.get("enabled", False)
+        )
+        if emb_enabled:
             models_dir = Path(cfg["output"]["models_dir"])
             tr, va, te = _apply_geo_embeddings(tr, va, te, cfg, models_dir)
 
