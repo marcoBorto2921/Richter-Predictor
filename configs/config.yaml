@@ -145,7 +145,7 @@ optuna:
   direction: maximize     # maximize F1-micro
   timeout: null           # no wall-clock limit
   show_progress_bar: true
-  n_estimators_ceiling: 3000   # tree-count ceiling for early stopping in trial objectives
+  n_estimators_ceiling: 1000   # tree-count ceiling for early stopping in trial objectives
   early_stopping_rounds: 50    # tighter patience for HPO trials (vs 100 in post-HPO training)
   best_iter_fallback: 500      # fallback best_iter if trial user_attr is missing (should never occur)
 

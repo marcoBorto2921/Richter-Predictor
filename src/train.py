@@ -335,7 +335,7 @@ def _lgb_objective(
         "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
         "subsample": trial.suggest_float("subsample", 0.5, 1.0),
         "subsample_freq": 1,
-        "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.15, log=True),
+        "learning_rate": trial.suggest_float("learning_rate", 0.03, 0.15, log=True),
         "reg_alpha": trial.suggest_float("reg_alpha", 1e-8, 10.0, log=True),
         "reg_lambda": trial.suggest_float("reg_lambda", 1e-8, 10.0, log=True),
         "n_estimators": n_est_ceiling,
