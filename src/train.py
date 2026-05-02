@@ -19,6 +19,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 import time
@@ -762,6 +763,19 @@ def train_kfold(
     print(f"  OOF F1-micro: {oof_f1:.4f}", flush=True)
     print(f"  Fold weights: {[f'{w:.4f}' for w in fold_weights]}", flush=True)
     print(f"  Best iters: {best_iters}", flush=True)
+
+    # Persist best HP + mean best_iter so refit can run without re-Optuna
+    if best_params is not None:
+        hp_record = {
+            "best_params": best_params,
+            "mean_best_iter": int(round(float(np.mean(best_iters)))),
+            "best_iters_per_fold": best_iters,
+            "oof_f1": float(oof_f1),
+        }
+        hp_path = Path(cfg["output"]["models_dir"]) / f"{model_name}_best_params.json"
+        with open(hp_path, "w", encoding="utf-8") as fh:
+            json.dump(hp_record, fh, indent=2)
+        logger.info("[%s] Best HP saved → %s", model_name.upper(), hp_path)
 
     return oof_proba, test_proba_avg, oof_f1, fold_f1_list
 
