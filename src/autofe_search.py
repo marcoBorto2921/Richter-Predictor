@@ -52,25 +52,35 @@ CANDIDATE_NAMES: list[str] = [
     # Age non-linearities
     "age_sq",
     "age_x_floors",
+    "log_age",
     # Material-age degradation
     "cement_brick_x_age",
     "mud_stone_x_floors",
+    "height_x_age",
     # Material composite flags
     "strong_structure",
     "weak_structure",
+    "rc_noneng_flag",
+    "timber_flag",
     # Geo-material interactions
     "geo1_x_mud_stone",
     "geo2_x_floors",
     "rc_eng_x_geo1",
     "mud_stone_x_geo2",
-    # Age-geo interaction (different from existing age_x_geo2)
+    "weak_x_geo2",
+    # Age-geo interactions
     "age_x_geo1",
+    "age_x_geo2",
+    # Three-way interaction
+    "mud_stone_x_age_x_geo2",
     # Composite risk flags
     "old_mud_stone",
     "foundation_x_mud",
     # Position (EDA: position='t' overrepresented in hard samples)
     "position_t_flag",
     "position_t_x_geo2",
+    # Plan configuration
+    "plan_u_flag",
     # Secondary use density
     "secondary_count",
     "secondary_x_area",
@@ -112,6 +122,8 @@ def compute_candidates(
     position_t = (df_raw["position"] == "t").astype(np.int8).values
     mud_stone = df_raw["has_superstructure_mud_mortar_stone"].values.astype(np.int8)
     rc_eng = df_raw["has_superstructure_rc_engineered"].values.astype(np.int8)
+    rc_noneng = df_raw["has_superstructure_rc_non_engineered"].values.astype(np.int8)
+    timber = df_raw["has_superstructure_timber"].values.astype(np.int8)
     cement_brick = df_raw["has_superstructure_cement_mortar_brick"].values.astype(np.int8)
     adobe = df_raw["has_superstructure_adobe_mud"].values.astype(np.int8)
     bamboo = df_raw["has_superstructure_bamboo"].values.astype(np.int8)
@@ -121,6 +133,7 @@ def compute_candidates(
     area = df_raw["area_percentage"].values.astype(np.float32)
     families = df_raw["count_families"].values.astype(np.float32)
     secondary = df_raw["has_secondary_use"].values.astype(np.float32)
+    plan_u = (df_raw["plan_configuration"] == "u").astype(np.int8).values
 
     # Geo TE columns from base features (already OOF-fitted)
     geo2_k2 = X_base["geo_level_2_id_te_k2"].values.astype(np.float32)
@@ -139,23 +152,33 @@ def compute_candidates(
     # Age
     cands["age_sq"] = age ** 2
     cands["age_x_floors"] = age * floors
+    cands["log_age"] = np.log1p(age)
 
-    # Material-age
+    # Material-age degradation
     cands["cement_brick_x_age"] = cement_brick.astype(np.float32) * age
     cands["mud_stone_x_floors"] = mud_stone.astype(np.float32) * floors
+    cands["height_x_age"] = height * age
 
     # Material composites
     cands["strong_structure"] = (rc_eng | cement_brick).astype(np.int8)
-    cands["weak_structure"] = (mud_stone | adobe | bamboo).astype(np.int8)
+    weak = (mud_stone | adobe | bamboo).astype(np.int8)
+    cands["weak_structure"] = weak
+    cands["rc_noneng_flag"] = rc_noneng
+    cands["timber_flag"] = timber
 
     # Geo-material
     cands["geo1_x_mud_stone"] = geo1_k2 * mud_stone.astype(np.float32)
     cands["geo2_x_floors"] = geo2_k2 * floors
     cands["rc_eng_x_geo1"] = rc_eng.astype(np.float32) * geo1_k2
     cands["mud_stone_x_geo2"] = mud_stone.astype(np.float32) * geo2_k2
+    cands["weak_x_geo2"] = weak.astype(np.float32) * geo2_k2
 
     # Age-geo
     cands["age_x_geo1"] = age * geo1_k2
+    cands["age_x_geo2"] = age * geo2_k2
+
+    # Three-way
+    cands["mud_stone_x_age_x_geo2"] = mud_stone.astype(np.float32) * age * geo2_k2
 
     # Composite risk
     cands["old_mud_stone"] = ((age > 25) & (mud_stone == 1)).astype(np.int8)
@@ -164,6 +187,9 @@ def compute_candidates(
     # Position (EDA: position='t' in hard samples)
     cands["position_t_flag"] = position_t
     cands["position_t_x_geo2"] = position_t.astype(np.float32) * geo2_k2
+
+    # Plan configuration
+    cands["plan_u_flag"] = plan_u
 
     # Secondary
     sec_sum = sum(
