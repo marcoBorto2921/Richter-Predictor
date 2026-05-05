@@ -595,11 +595,12 @@ def build_features(
     else:  # catboost mode
         # Keep all categoricals as strings — CatBoost handles encoding internally.
         # Convert geo cols to string so CatBoost treats them as categorical.
-        for col in geo_cols + cat_cols_low:
-            tr.loc[:, col] = tr[col].astype(str)
-            va.loc[:, col] = va[col].astype(str)
-            if te is not None:
-                te.loc[:, col] = te[col].astype(str)
+        # Use .astype() on full dict to avoid pandas CoW FutureWarning.
+        str_cols = {col: str for col in geo_cols + cat_cols_low if col in tr.columns}
+        tr = tr.astype(str_cols)
+        va = va.astype(str_cols)
+        if te is not None:
+            te = te.astype(str_cols)
 
         drop_cols = [target_col]
         X_train = tr.drop(columns=[c for c in drop_cols if c in tr.columns])

@@ -394,7 +394,7 @@ def _cat_objective(
     es_rounds: int,
 ) -> float:
     params = {
-        "depth": trial.suggest_int("depth", 4, 10),
+        "depth": trial.suggest_int("depth", 4, 7),
         "l2_leaf_reg": trial.suggest_float("l2_leaf_reg", 0.1, 10.0, log=True),
         "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.15, log=True),
         "bagging_temperature": trial.suggest_float("bagging_temperature", 0.0, 1.0),
@@ -553,6 +553,7 @@ def run_optuna(
         n_trials=n_trials,
         timeout=optuna_cfg.get("timeout"),
         show_progress_bar=optuna_cfg.get("show_progress_bar", True),
+        catch=(Exception,),
     )
 
     best_trial = study.best_trial
