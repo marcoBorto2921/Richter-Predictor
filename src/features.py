@@ -179,6 +179,9 @@ def _add_shared_features(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
         - height_to_area: height_percentage / (area_percentage + 1) — slenderness proxy
         - floors_ge3: indicator for 3+ pre-earthquake floors
         - age_x_area: age * area_percentage — building mass over time
+        - material_strength: ordinal composite — RC engineered (+3) to adobe/bamboo (-2)
+        - mud_stone_x_age: mud_mortar_stone × age — old degraded weak-material buildings
+        - rc_eng_x_floors: rc_engineered × count_floors_pre_eq — modern multistory resilience
 
     Args:
         df: Input DataFrame.
@@ -200,6 +203,71 @@ def _add_shared_features(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     )
     out.loc[:, "floors_ge3"] = (out["count_floors_pre_eq"] >= 3).astype(np.int8)
     out.loc[:, "age_x_area"] = out["age"] * out["area_percentage"]
+
+    return out
+
+
+def _fit_geo_damage_variance(
+    df_train: pd.DataFrame,
+    geo_col: str,
+    target_col: str,
+    smoothing: float = 10.0,
+) -> tuple[pd.Series, float]:
+    """Fit smoothed std(damage_grade) per geo group on training fold.
+
+    High variance zones have mixed building quality — signal beyond mean damage.
+    Smoothed toward global std to handle small groups.
+
+    Args:
+        df_train: Training DataFrame with geo_col and target_col.
+        geo_col: Geographic grouping column.
+        target_col: Target column name.
+        smoothing: Additive smoothing weight toward global std.
+
+    Returns:
+        Tuple of (mapping_series, global_fallback_std).
+    """
+    y = df_train[target_col].astype(float)
+    global_std = float(y.std())
+    stats = y.groupby(df_train[geo_col]).agg(["count", "std"]).fillna(0)
+    smoothed = (stats["count"] * stats["std"] + smoothing * global_std) / (
+        stats["count"] + smoothing
+    )
+    return smoothed, global_std
+
+
+def _add_lgb_xgb_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Add interaction features that benefit LGB/XGB but hurt tree ensembles (ET/RF).
+
+    Features added:
+        - material_strength: ordinal composite — RC engineered (+3) to adobe/bamboo (-2)
+        - mud_stone_x_age: mud_mortar_stone × age — old degraded weak-material buildings
+        - rc_eng_x_floors: rc_engineered × count_floors_pre_eq — modern multistory resilience
+
+    Args:
+        df: Input DataFrame (already has shared features applied).
+
+    Returns:
+        DataFrame with new features appended.
+    """
+    out = df.copy()
+
+    out.loc[:, "material_strength"] = (
+        out["has_superstructure_rc_engineered"] * 3
+        + out["has_superstructure_rc_non_engineered"] * 2
+        + out["has_superstructure_cement_mortar_brick"] * 1
+        - out["has_superstructure_mud_mortar_stone"] * 1
+        - out["has_superstructure_adobe_mud"] * 2
+        - out["has_superstructure_bamboo"] * 2
+    ).astype(np.int8)
+
+    out.loc[:, "mud_stone_x_age"] = (
+        out["has_superstructure_mud_mortar_stone"] * out["age"]
+    ).astype(np.float32)
+
+    out.loc[:, "rc_eng_x_floors"] = (
+        out["has_superstructure_rc_engineered"] * out["count_floors_pre_eq"]
+    ).astype(np.float32)
 
     return out
 
@@ -256,6 +324,100 @@ def _apply_geo_embeddings(
     return tr, va, te
 
 
+_SECONDARY_COLS_AUTOFE = [
+    "has_secondary_use_agriculture",
+    "has_secondary_use_hotel",
+    "has_secondary_use_rental",
+    "has_secondary_use_institution",
+    "has_secondary_use_school",
+    "has_secondary_use_industry",
+    "has_secondary_use_health_post",
+    "has_secondary_use_gov_office",
+    "has_secondary_use_use_police",
+    "has_secondary_use_other",
+]
+
+
+def _add_autofe_features(
+    df_raw: pd.DataFrame,
+    df_encoded: pd.DataFrame,
+    selected: list[str],
+) -> pd.DataFrame:
+    """Append AutoFE-selected candidate features to an encoded DataFrame.
+
+    Uses raw categorical columns (df_raw: foundation_type, position) and
+    already-encoded geo TE columns (df_encoded: geo_level_*_te_k*).
+
+    Args:
+        df_raw: Raw input DataFrame (pre-encoding), same reset index as df_encoded.
+        df_encoded: Encoded feature DataFrame to append columns to.
+        selected: List of feature names to compute and append.
+
+    Returns:
+        df_encoded with selected features appended (copy).
+    """
+    if not selected:
+        return df_encoded
+
+    out = df_encoded.copy()
+
+    # Raw inputs
+    found_r = (df_raw["foundation_type"] == "r").astype(np.int8).values
+    position_t = (df_raw["position"] == "t").astype(np.int8).values
+    mud_stone = df_raw["has_superstructure_mud_mortar_stone"].values.astype(np.int8)
+    rc_eng = df_raw["has_superstructure_rc_engineered"].values.astype(np.int8)
+    cement_brick = df_raw["has_superstructure_cement_mortar_brick"].values.astype(np.int8)
+    adobe = df_raw["has_superstructure_adobe_mud"].values.astype(np.int8)
+    bamboo = df_raw["has_superstructure_bamboo"].values.astype(np.int8)
+    age = df_raw["age"].values.astype(np.float32)
+    floors = df_raw["count_floors_pre_eq"].values.astype(np.float32)
+    height = df_raw["height_percentage"].values.astype(np.float32)
+    area = df_raw["area_percentage"].values.astype(np.float32)
+    families = df_raw["count_families"].values.astype(np.float32)
+    secondary = df_raw["has_secondary_use"].values.astype(np.float32)
+
+    # Encoded geo TE columns
+    geo2_k2 = df_encoded["geo_level_2_id_te_k2"].values.astype(np.float32)
+    geo1_k2 = df_encoded["geo_level_1_id_te_k2"].values.astype(np.float32)
+
+    _all: dict[str, np.ndarray] = {
+        "foundation_r_flag": found_r,
+        "foundation_r_x_geo2": found_r.astype(np.float32) * geo2_k2,
+        "floors_sq": floors ** 2,
+        "floors_x_height": floors * height,
+        "area_x_floors": area * floors,
+        "height_to_floors": height / (floors + 0.5),
+        "age_sq": age ** 2,
+        "age_x_floors": age * floors,
+        "cement_brick_x_age": cement_brick.astype(np.float32) * age,
+        "mud_stone_x_floors": mud_stone.astype(np.float32) * floors,
+        "strong_structure": (rc_eng | cement_brick).astype(np.int8),
+        "weak_structure": (mud_stone | adobe | bamboo).astype(np.int8),
+        "geo1_x_mud_stone": geo1_k2 * mud_stone.astype(np.float32),
+        "geo2_x_floors": geo2_k2 * floors,
+        "rc_eng_x_geo1": rc_eng.astype(np.float32) * geo1_k2,
+        "mud_stone_x_geo2": mud_stone.astype(np.float32) * geo2_k2,
+        "age_x_geo1": age * geo1_k2,
+        "old_mud_stone": ((age > 25) & (mud_stone == 1)).astype(np.int8),
+        "foundation_x_mud": (found_r.astype(bool) & (mud_stone == 1)).astype(np.int8),
+        "position_t_flag": position_t,
+        "position_t_x_geo2": position_t.astype(np.float32) * geo2_k2,
+        "secondary_count": sum(
+            df_raw[c].values.astype(np.int8)
+            for c in _SECONDARY_COLS_AUTOFE
+            if c in df_raw.columns
+        ).astype(np.int8),
+        "secondary_x_area": secondary * area,
+        "families_x_area": families * area,
+    }
+
+    for name in selected:
+        if name in _all:
+            out.loc[:, name] = _all[name].astype(np.float32)
+
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -268,12 +430,15 @@ def build_features(
     cfg: dict,
     mode: str = "lgb_xgb",
     use_embeddings: bool | None = None,
+    use_cat_te: bool | None = None,
+    autofe_features: list[str] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame | None, list[str]]:
     """Build feature matrices for training, validation, and test sets.
 
     For "lgb_xgb" mode:
-        - geo_level_* are target-encoded (9 new float cols, originals dropped).
-        - Low-cardinality categoricals are label-encoded to integers.
+        - geo_level_* are target-encoded via GLMM (9 new float cols, originals dropped).
+        - Low-cardinality categoricals are GLMM target-encoded (24 float cols) when
+          use_cat_te=True (default), otherwise label-encoded to integers.
         - Interaction feature age_x_geo2_damage (age * geo_level_2 damage encoding) added.
         - Optional: geo entity embedding columns appended (config-gated or caller-gated).
 
@@ -295,6 +460,9 @@ def build_features(
             None (default) → read from cfg['features']['geo_embedding']['enabled'].
             True/False → override config, regardless of config value.
             Use False for ET/RF (random subsampling dilutes embedding signal).
+        use_cat_te: Whether to GLMM target-encode low-cardinality categoricals.
+            None (default) → True for LGB/XGB (better than label encoding).
+            False → fall back to label encoding (used for ET/RF).
 
     Returns:
         Tuple of (X_train, X_val, X_test_or_None, cat_cols).
@@ -323,6 +491,11 @@ def build_features(
     te = _add_shared_features(df_test, cfg) if df_test is not None else None
 
     if mode == "lgb_xgb":
+        # Material interaction features — beneficial for LGB/XGB, hurt ET/RF
+        tr = _add_lgb_xgb_features(tr)
+        va = _add_lgb_xgb_features(va)
+        if te is not None:
+            te = _add_lgb_xgb_features(te)
         if encoding_method == "glmm":
             # -- Empirical Bayes encoding (GLMM-style adaptive shrinkage) --
             for geo_col in geo_cols:
@@ -349,6 +522,15 @@ def build_features(
         if te is not None:
             te.loc[:, "age_x_geo2_damage"] = te["age"] * te[geo2_k2_col]
 
+        # Geo damage variance: config-gated (tested 2026-05-05, hurts LGB −0.0018)
+        if cfg["features"].get("geo3_damage_std", False):
+            geo3_col = "geo_level_3_id"
+            var_map, var_fallback = _fit_geo_damage_variance(tr, geo3_col, target_col)
+            for frame in [tr, va] + ([te] if te is not None else []):
+                frame.loc[:, "geo3_damage_std"] = (
+                    frame[geo3_col].map(var_map).fillna(var_fallback).astype(np.float32)
+                )
+
         # -- Optional: geo entity embedding features --
         emb_cfg = cfg["features"].get("geo_embedding", {})
         emb_enabled = (
@@ -360,22 +542,36 @@ def build_features(
             models_dir = Path(cfg["output"]["models_dir"])
             tr, va, te = _apply_geo_embeddings(tr, va, te, cfg, models_dir)
 
-        # -- Label-encode low-cardinality categoricals --
-        le_map: dict[str, LabelEncoder] = {}
-        for col in cat_cols_low:
-            le = LabelEncoder()
-            le.fit(tr[col].astype(str))
-            le_map[col] = le
-
-        for col, le in le_map.items():
+        # -- Encode low-cardinality categoricals --
+        # use_cat_te=True (default): GLMM TE — 3 float cols per cat (P(grade=k|cat))
+        # use_cat_te=False: label-encode to integers (used for ET/RF)
+        apply_cat_te = use_cat_te if use_cat_te is not None else True
+        if apply_cat_te:
+            for col in cat_cols_low:
+                enc = _fit_empirical_bayes_encoder(tr, col, target_col, classes)
+                tr = _apply_target_encoder(tr, col, enc)
+                va = _apply_target_encoder(va, col, enc)
+                if te is not None:
+                    te = _apply_target_encoder(te, col, enc)
+            # Drop original low-card cat columns (replaced by TE versions)
             for frame in [tr, va] + ([te] if te is not None else []):
-                known = set(le.classes_)
-                cleaned = (
-                    frame[col]
-                    .astype(str)
-                    .apply(lambda x: x if x in known else le.classes_[0])
-                )
-                frame[col] = le.transform(cleaned).astype(int)
+                frame.drop(columns=[c for c in cat_cols_low if c in frame.columns], inplace=True)
+        else:
+            le_map: dict[str, LabelEncoder] = {}
+            for col in cat_cols_low:
+                le = LabelEncoder()
+                le.fit(tr[col].astype(str))
+                le_map[col] = le
+
+            for col, le in le_map.items():
+                for frame in [tr, va] + ([te] if te is not None else []):
+                    known = set(le.classes_)
+                    cleaned = (
+                        frame[col]
+                        .astype(str)
+                        .apply(lambda x: x if x in known else le.classes_[0])
+                    )
+                    frame[col] = le.transform(cleaned).astype(int)
 
         # -- Drop original geo columns (replaced by target-encoded versions) --
         drop_cols = geo_cols + [target_col]
@@ -386,16 +582,24 @@ def build_features(
             if te is not None
             else None
         )
+
+        # -- AutoFE: append selected candidate features --
+        if autofe_features:
+            X_train = _add_autofe_features(df_train.reset_index(drop=True), X_train, autofe_features)
+            X_val = _add_autofe_features(df_val.reset_index(drop=True), X_val, autofe_features)
+            if X_test is not None and df_test is not None:
+                X_test = _add_autofe_features(df_test.reset_index(drop=True), X_test, autofe_features)
+
         return X_train, X_val, X_test, []
 
     else:  # catboost mode
         # Keep all categoricals as strings — CatBoost handles encoding internally.
         # Convert geo cols to string so CatBoost treats them as categorical.
         for col in geo_cols + cat_cols_low:
-            tr[col] = tr[col].astype(str)
-            va[col] = va[col].astype(str)
+            tr.loc[:, col] = tr[col].astype(str)
+            va.loc[:, col] = va[col].astype(str)
             if te is not None:
-                te[col] = te[col].astype(str)
+                te.loc[:, col] = te[col].astype(str)
 
         drop_cols = [target_col]
         X_train = tr.drop(columns=[c for c in drop_cols if c in tr.columns])

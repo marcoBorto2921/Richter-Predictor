@@ -651,11 +651,23 @@ def train_kfold(
         y_val = y_all[val_idx]
 
         # Feature engineering per fold (target encoding fitted on train fold only)
-        # ET/RF: use_embeddings=False — random feature subsampling dilutes embedding signal
+        # ET/RF: use_embeddings=False, use_cat_te=False — subsampling dilutes TE signal
         logger.info("[%s] Building features (mode=%s)...", model_name.upper(), mode)
         use_emb = False if model_name in ("et", "rf") else None
+        use_cte = False if model_name in ("et", "rf") else None
+
+        # Load AutoFE selected features if available (lgb only — XGB hurt by these features)
+        autofe_feats: list[str] | None = None
+        if model_name == "lgb":
+            autofe_path = Path(cfg["output"]["models_dir"]) / "autofe_best_features.json"
+            if autofe_path.exists():
+                with open(autofe_path, encoding="utf-8") as _f:
+                    autofe_feats = json.load(_f).get("selected", [])
+
         X_train, X_val, X_test, cat_cols = build_features(
-            df_tr, df_va, df_test, cfg, mode, use_embeddings=use_emb
+            df_tr, df_va, df_test, cfg, mode,
+            use_embeddings=use_emb, use_cat_te=use_cte,
+            autofe_features=autofe_feats,
         )
 
         # Optuna on fold 0 only
@@ -824,11 +836,12 @@ def train_holdout(
     y_val = y_all[idx_val]
 
     # Feature engineering
-    # ET/RF: use_embeddings=False — random feature subsampling dilutes embedding signal
+    # ET/RF: use_embeddings=False, use_cat_te=False — subsampling dilutes TE signal
     logger.info("[%s] Building features (mode=%s)...", model_name.upper(), mode)
     use_emb = False if model_name in ("et", "rf") else None
+    use_cte = False if model_name in ("et", "rf") else None
     X_train, X_val, X_test, cat_cols = build_features(
-        df_tr, df_va, df_test, cfg, mode, use_embeddings=use_emb
+        df_tr, df_va, df_test, cfg, mode, use_embeddings=use_emb, use_cat_te=use_cte
     )
 
     # Baseline train
@@ -941,6 +954,15 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Use single 80/20 holdout instead of k-fold CV",
     )
+    parser.add_argument(
+        "--refit-full",
+        action="store_true",
+        help=(
+            "Refit on full train (all folds combined) using best HP from JSON. "
+            "Overwrites test_proba.npy only — val_proba/OOF unchanged. "
+            "Requires a prior k-fold run to have saved {model}_best_params.json."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -972,6 +994,64 @@ def main() -> None:
 
     use_optuna = not args.no_optuna
     n_classes = len(cfg["features"]["classes"])
+
+    if args.refit_full:
+        # Refit on full train using saved best HP — only overwrites test_proba.npy
+        hp_path = models_dir / f"{args.model}_best_params.json"
+        if not hp_path.exists():
+            raise FileNotFoundError(
+                f"{hp_path} not found. Run k-fold training first to generate best HP."
+            )
+        with open(hp_path, encoding="utf-8") as fh:
+            hp_record = json.load(fh)
+
+        best_params = hp_record["best_params"]
+        mean_best_iter = hp_record["mean_best_iter"]
+        logger.info(
+            "[%s] Refit-full: best_params=%s mean_best_iter=%d",
+            args.model.upper(), best_params, mean_best_iter,
+        )
+
+        # Build features on full train (no val split — use a dummy val = first 1000 rows)
+        mode = "catboost" if args.model == "cat" else "lgb_xgb"
+        use_emb = False if args.model in ("et", "rf") else None
+        use_cte = False if args.model in ("et", "rf") else None
+        # Load AutoFE features (lgb only — consistent with kfold path)
+        autofe_feats_refit: list[str] | None = None
+        if args.model == "lgb":
+            autofe_path_r = models_dir / "autofe_best_features.json"
+            if autofe_path_r.exists():
+                with open(autofe_path_r, encoding="utf-8") as _f:
+                    autofe_feats_refit = json.load(_f).get("selected", [])
+        dummy_val = df_train_full.iloc[:1000].reset_index(drop=True)
+        df_tr = df_train_full.reset_index(drop=True)
+        X_full, _, X_test, cat_cols = build_features(
+            df_tr, dummy_val, df_test, cfg, mode,
+            use_embeddings=use_emb, use_cat_te=use_cte,
+            autofe_features=autofe_feats_refit,
+        )
+        y_full = y_all
+
+        refit_params = dict(best_params)
+        refit_params["random_state"] = cfg["seed"]
+        if args.model in ("lgb", "xgb") and "verbose" not in refit_params:
+            refit_params["verbose"] = -1
+        if args.model == "lgb" and "n_jobs" not in refit_params:
+            refit_params["n_jobs"] = -1
+
+        logger.info("[%s] Refitting on %d samples...", args.model.upper(), len(X_full))
+        final_model = refit_model(
+            args.model, X_full, y_full, refit_params, mean_best_iter, cat_cols, n_classes,
+        )
+        test_proba = predict_proba(args.model, final_model, X_test)
+        np.save(models_dir / f"{args.model}_test_proba.npy", test_proba)
+        joblib.dump(final_model, models_dir / f"{args.model}_model.pkl")
+        print(
+            f"[{args.model.upper()}] Refit-full done. "
+            f"test_proba.npy overwritten ({test_proba.shape}).",
+            flush=True,
+        )
+        return
 
     if args.no_kfold:
         # Legacy holdout mode
