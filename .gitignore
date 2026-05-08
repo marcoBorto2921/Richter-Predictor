@@ -1,4 +1,5 @@
 /.claude
+docs/superpowers/
 .venv/
 __pycache__/
 *.pyc
