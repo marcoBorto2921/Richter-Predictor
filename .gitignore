@@ -19,3 +19,4 @@ submissions/
 wandb/
 .ruff_cache/
 catboost_info/
+outputs/
