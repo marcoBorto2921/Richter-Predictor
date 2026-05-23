@@ -88,6 +88,63 @@ def optimize_weights(
 
 
 # ---------------------------------------------------------------------------
+# Log-bias offset optimization (EXP-013)
+# ---------------------------------------------------------------------------
+
+
+def optimize_log_bias(
+    val_proba: np.ndarray,
+    y_val: np.ndarray,
+    seed: int,
+) -> tuple[np.ndarray, float]:
+    """Find per-class log-probability offsets that maximize F1-micro.
+
+    Adds offsets [b0, b1, b2] to log-probabilities before argmax.
+    More expressive than hard t0/t2 thresholds: allows smooth per-class
+    re-weighting. Directly attacks Grade 3 under-detection (b2 > 0 boosts class 3).
+
+    Args:
+        val_proba: (n_samples, 3) probability array (OOF blend).
+        y_val: True labels (0-indexed).
+        seed: Random seed.
+
+    Returns:
+        Tuple of (biases array [b0, b1, b2], best_f1_micro).
+    """
+    np.random.seed(seed)
+    log_p = np.log(np.clip(val_proba, 1e-9, 1.0))
+
+    def neg_f1(biases: np.ndarray) -> float:
+        shifted = log_p + biases
+        preds = np.argmax(shifted, axis=1)
+        return -f1_score(y_val, preds, average="micro")
+
+    result = minimize(
+        neg_f1,
+        x0=np.zeros(3),
+        method="Nelder-Mead",
+        options={"maxiter": 10000, "xatol": 1e-7, "fatol": 1e-7},
+    )
+    biases = result.x
+    best_f1 = -result.fun
+    return biases, best_f1
+
+
+def apply_log_bias(proba: np.ndarray, biases: np.ndarray) -> np.ndarray:
+    """Apply per-class log-probability offsets and return argmax predictions.
+
+    Args:
+        proba: (n_samples, 3) probability array.
+        biases: Per-class log-space offsets [b0, b1, b2].
+
+    Returns:
+        Integer prediction array (0-indexed).
+    """
+    log_p = np.log(np.clip(proba, 1e-9, 1.0))
+    return np.argmax(log_p + biases, axis=1)
+
+
+# ---------------------------------------------------------------------------
 # Threshold optimization
 # ---------------------------------------------------------------------------
 
@@ -249,6 +306,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="After blending, optimize per-class thresholds (t0, t2) to maximize F1-micro",
     )
+    parser.add_argument(
+        "--log-bias",
+        action="store_true",
+        help="After blending, optimize per-class log-prob offsets [b0,b1,b2] to maximize F1-micro",
+    )
     return parser.parse_args()
 
 
@@ -338,6 +400,33 @@ def main() -> None:
         print(f"Optimized ensemble F1-micro: {f1_opt:.4f}")
         test_blend = _blend_proba(test_probas, optimal_weights)
         method_tag = "wavg"
+
+    # -- Optional: log-bias offset optimization (EXP-013) --
+    if args.log_bias:
+        print("\nOptimizing log-prob class biases [b0, b1, b2]...")
+        biases, f1_biased = optimize_log_bias(val_blend, y_val, cfg["seed"])
+        gain = f1_biased - f1_opt
+        print(f"  b0 (class 1 / low damage):   {biases[0]:+.4f}")
+        print(f"  b1 (class 2 / medium):        {biases[1]:+.4f}")
+        print(f"  b2 (class 3 / near-total):    {biases[2]:+.4f}")
+        print(f"  F1-micro with log-bias:        {f1_biased:.4f} ({gain:+.4f} vs argmax)")
+        method_tag += "_logbias"
+        f1_opt = f1_biased
+        test_preds = apply_log_bias(test_blend, biases) + 1  # 1-indexed
+        # Skip remaining threshold step
+        print("\nGenerating submission...")
+        submission = pd.DataFrame({"building_id": test_ids, "damage_grade": test_preds})
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        models_tag = "_".join(models_order)
+        filename = f"{timestamp}_{models_tag}_{method_tag}_f1micro_{f1_opt:.4f}.csv"
+        submission_path = submissions_dir / filename
+        submission.to_csv(submission_path, index=False, encoding="utf-8")
+        print(f"Submission saved: {submission_path}")
+        print(f"Submission shape: {submission.shape}")
+        print(
+            f"damage_grade distribution:\n{submission['damage_grade'].value_counts().sort_index()}"
+        )
+        return
 
     # -- Optional: threshold optimization --
     if args.post_threshold:

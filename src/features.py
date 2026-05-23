@@ -357,6 +357,92 @@ def _apply_geo_embeddings(
     return tr, va, te
 
 
+def _fit_neighborhood_features(
+    df_train: pd.DataFrame,
+    geo_col: str,
+) -> dict[str, tuple[pd.Series, float]]:
+    """Fit zone-level structural aggregates on training fold.
+
+    Computes per-geo3 zone statistics about the building stock.
+    These encode the structural environment of each building —
+    information not captured by GLMM damage encoding alone.
+
+    Args:
+        df_train: Training DataFrame with raw structural columns.
+        geo_col: Geographic grouping column (e.g. geo_level_3_id).
+
+    Returns:
+        Dict mapping feature name to (mapping_series, global_fallback).
+    """
+    result: dict[str, tuple[pd.Series, float]] = {}
+    groups = df_train.groupby(geo_col)
+
+    # Mean age
+    age_mean = groups["age"].mean()
+    result["geo3_mean_age"] = (age_mean, float(df_train["age"].mean()))
+
+    # Fraction brittle materials (mud_stone | stone_flag | adobe_mud)
+    brittle = (
+        (df_train["has_superstructure_mud_mortar_stone"] == 1)
+        | (df_train["has_superstructure_stone_flag"] == 1)
+        | (df_train["has_superstructure_adobe_mud"] == 1)
+    ).astype(float)
+    frac_brittle = brittle.groupby(df_train[geo_col]).mean()
+    result["geo3_frac_brittle"] = (frac_brittle, float(brittle.mean()))
+
+    # Fraction RC engineered (resilient buildings)
+    rc_eng = df_train["has_superstructure_rc_engineered"].astype(float)
+    frac_rc = rc_eng.groupby(df_train[geo_col]).mean()
+    result["geo3_frac_rc_eng"] = (frac_rc, float(rc_eng.mean()))
+
+    # Mean floors
+    floors_mean = groups["count_floors_pre_eq"].mean()
+    result["geo3_mean_floors"] = (floors_mean, float(df_train["count_floors_pre_eq"].mean()))
+
+    # Fraction multi-floor (3+)
+    multi_floor = (df_train["count_floors_pre_eq"] >= 3).astype(float)
+    frac_multi = multi_floor.groupby(df_train[geo_col]).mean()
+    result["geo3_frac_multi_floor"] = (frac_multi, float(multi_floor.mean()))
+
+    return result
+
+
+def _apply_neighborhood_features(
+    df: pd.DataFrame,
+    geo_col: str,
+    stats: dict[str, tuple[pd.Series, float]],
+) -> pd.DataFrame:
+    """Apply pre-fitted neighborhood features and add delta features.
+
+    Also computes:
+        - age_vs_geo3: building age minus zone mean age
+        - floors_vs_geo3: building floors minus zone mean floors
+
+    Args:
+        df: DataFrame to transform (must contain geo_col and structural cols).
+        geo_col: Geographic grouping column.
+        stats: Output of _fit_neighborhood_features.
+
+    Returns:
+        DataFrame with new neighborhood features appended.
+    """
+    out = df.copy()
+    for feat_name, (mapping, fallback) in stats.items():
+        out.loc[:, feat_name] = (
+            out[geo_col].map(mapping).fillna(fallback).astype(np.float32)
+        )
+
+    # Delta features: how does this building compare to its zone?
+    out.loc[:, "age_vs_geo3"] = (
+        out["age"].astype(np.float32) - out["geo3_mean_age"]
+    ).astype(np.float32)
+    out.loc[:, "floors_vs_geo3"] = (
+        out["count_floors_pre_eq"].astype(np.float32) - out["geo3_mean_floors"]
+    ).astype(np.float32)
+
+    return out
+
+
 _SECONDARY_COLS_AUTOFE = [
     "has_secondary_use_agriculture",
     "has_secondary_use_hotel",
@@ -549,6 +635,15 @@ def build_features(
                 va = _apply_target_encoder(va, geo_col, enc)
                 if te is not None:
                     te = _apply_target_encoder(te, geo_col, enc)
+
+        # -- Neighborhood structural features (EXP-014) --
+        # Fitted on train fold only — captures zone structural composition
+        # beyond what GLMM damage encoding provides.
+        neighborhood_stats = _fit_neighborhood_features(df_train, "geo_level_3_id")
+        tr = _apply_neighborhood_features(tr, "geo_level_3_id", neighborhood_stats)
+        va = _apply_neighborhood_features(va, "geo_level_3_id", neighborhood_stats)
+        if te is not None:
+            te = _apply_neighborhood_features(te, "geo_level_3_id", neighborhood_stats)
 
         # Interaction: age × geo_level_2 class-2 encoding (high-damage zones × age)
         geo2_k2_col = "geo_level_2_id_te_k2"
