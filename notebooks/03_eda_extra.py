@@ -1,6 +1,6 @@
 """
 Extra EDA analyses from Opus review — Richter's Predictor.
-Run: .venv/Scripts/python eda_extra.py
+Run: .venv/Scripts/python notebooks/03_eda_extra.py
 """
 
 from __future__ import annotations

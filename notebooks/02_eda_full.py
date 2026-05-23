@@ -1,6 +1,6 @@
 """
 EDA — Richter's Predictor
-Run: .venv/Scripts/python eda.py 2>&1 | tee outputs/eda/eda_raw.log
+Run: .venv/Scripts/python notebooks/02_eda_full.py 2>&1 | tee outputs/eda/eda_raw.log
 Outputs: stdout flags + plots in outputs/eda/
 """
 
@@ -12,7 +12,7 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-sys.path.insert(0, str(Path(__file__).parent / "eda"))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import matplotlib  # noqa: E402
 
@@ -823,8 +823,8 @@ def main() -> None:
     train, test = load_data()
 
     # Standard core + tabular checks
-    from core import run_core_checks
-    from tabular import run_tabular_checks
+    from src.eda.core import run_core_checks
+    from src.eda.tabular import run_tabular_checks
 
     try:
         run_core_checks(

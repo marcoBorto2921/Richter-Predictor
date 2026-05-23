@@ -1,7 +1,7 @@
 """
 Error analysis — Richter's Predictor.
 Trains quick LGB, identifies systematic misclassification patterns.
-Run: .venv/Scripts/python eda_error_analysis.py
+Run: .venv/Scripts/python notebooks/04_error_analysis.py
 """
 
 from __future__ import annotations

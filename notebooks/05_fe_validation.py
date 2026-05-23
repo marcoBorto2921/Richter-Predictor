@@ -3,7 +3,7 @@
 Quick 80/20 LGB (500 rounds) via build_features() to validate new engineered features.
 Compares F1-micro against known baseline (raw features, same split: 0.7430).
 
-Run: .venv/Scripts/python fe_validation.py
+Run: .venv/Scripts/python notebooks/05_fe_validation.py
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from lightgbm import LGBMClassifier
 from sklearn.metrics import f1_score
 from sklearn.model_selection import train_test_split
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.features import build_features
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
