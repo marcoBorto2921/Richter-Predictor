@@ -141,7 +141,7 @@ models:
     random_state: 42
 
 optuna:
-  n_trials: 30
+  n_trials: 50
   n_trials_et: 40          # ET has no early stopping — each trial is slower; fewer trials suffice
   direction: maximize     # maximize F1-micro
   timeout: null           # no wall-clock limit

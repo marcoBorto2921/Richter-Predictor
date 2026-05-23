@@ -175,13 +175,10 @@ def _add_shared_features(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
 
     Features added:
         - superstructure_count: sum of 11 binary superstructure flags
-        - has_secondary_use_any: binary OR of all secondary-use flags
         - height_to_area: height_percentage / (area_percentage + 1) — slenderness proxy
         - floors_ge3: indicator for 3+ pre-earthquake floors
         - age_x_area: age * area_percentage — building mass over time
-        - material_strength: ordinal composite — RC engineered (+3) to adobe/bamboo (-2)
-        - mud_stone_x_age: mud_mortar_stone × age — old degraded weak-material buildings
-        - rc_eng_x_floors: rc_engineered × count_floors_pre_eq — modern multistory resilience
+        - brittle_material: mud_mortar_stone | stone_flag | adobe_mud — shared brittle failure mechanism
 
     Args:
         df: Input DataFrame.
@@ -192,17 +189,22 @@ def _add_shared_features(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     """
     out = df.copy()
     super_cols = cfg["features"]["superstructure_cols"]
-    sec_cols = cfg["features"]["secondary_use_cols"]
-
     out.loc[:, "superstructure_count"] = out[super_cols].sum(axis=1)
-    out.loc[:, "has_secondary_use_any"] = (out[sec_cols].sum(axis=1) > 0).astype(
-        np.int8
-    )
+    # has_secondary_use_any dropped: importance=0 in validation (redundant with individual flags)
     out.loc[:, "height_to_area"] = out["height_percentage"] / (
         out["area_percentage"] + 1.0
     )
     out.loc[:, "floors_ge3"] = (out["count_floors_pre_eq"] >= 3).astype(np.int8)
     out.loc[:, "age_x_area"] = out["age"] * out["area_percentage"]
+
+    # brittle_material: mud/stone/adobe share brittle failure (G3 rates: 47%, 38%, 37%)
+    out.loc[:, "brittle_material"] = (
+        (out["has_superstructure_mud_mortar_stone"] == 1)
+        | (out["has_superstructure_stone_flag"] == 1)
+        | (out["has_superstructure_adobe_mud"] == 1)
+    ).astype(np.int8)
+
+    # age_is_zero and ductile_building dropped: importance 66/56 in validation — negligible signal
 
     return out
 
@@ -239,13 +241,21 @@ def _fit_geo_damage_variance(
 def _add_lgb_xgb_features(df: pd.DataFrame) -> pd.DataFrame:
     """Add interaction features that benefit LGB/XGB but hurt tree ensembles (ET/RF).
 
+    Requires raw categorical columns (foundation_type, land_surface_condition,
+    plan_configuration, geo_level_1_id) still present — call before GLMM encoding.
+
     Features added:
         - material_strength: ordinal composite — RC engineered (+3) to adobe/bamboo (-2)
-        - mud_stone_x_age: mud_mortar_stone × age — old degraded weak-material buildings
-        - rc_eng_x_floors: rc_engineered × count_floors_pre_eq — modern multistory resilience
+        - mud_stone_x_age: mud_mortar_stone x age — old degraded weak-material buildings
+        - rc_eng_x_floors: rc_engineered x count_floors_pre_eq — modern multistory resilience
+        - slope_x_foundation_r: slope + rubble foundation = mean damage 2.60 (worst interaction)
+        - plan_irregular: plan 'q' (torsional irregularity) = 40.9% Grade 3
+        - geo1_high_seismic: regions 17/18/21 = worst Grade 2->3 confusion in error analysis
+        - brittle_x_floors: brittle masonry x height — catastrophic collapse risk
+        - high_seismic_x_brittle: high-seismic zone x brittle material (amplification effect)
 
     Args:
-        df: Input DataFrame (already has shared features applied).
+        df: Input DataFrame (already has shared features applied, raw cats still present).
 
     Returns:
         DataFrame with new features appended.
@@ -267,6 +277,29 @@ def _add_lgb_xgb_features(df: pd.DataFrame) -> pd.DataFrame:
 
     out.loc[:, "rc_eng_x_floors"] = (
         out["has_superstructure_rc_engineered"] * out["count_floors_pre_eq"]
+    ).astype(np.float32)
+
+    # slope + rubble foundation: EDA worst interaction cell (mean damage 2.60)
+    out.loc[:, "slope_x_foundation_r"] = (
+        (out["land_surface_condition"] == "o") & (out["foundation_type"] == "r")
+    ).astype(np.int8)
+
+    # plan 'q' = complex irregular shape, torsional irregularity — 40.9% Grade 3 (worst)
+    out.loc[:, "plan_irregular"] = (out["plan_configuration"] == "q").astype(np.int8)
+
+    # geo1 high-seismic zones: regions 17/18/21 drove worst 2->3 confusion in error analysis
+    out.loc[:, "geo1_high_seismic"] = (
+        out["geo_level_1_id"].isin([17, 18, 21]).astype(np.int8)
+    )
+
+    # brittle material x floors: brittle masonry height amplifies collapse (1 floor->25% G3; 7+->80%)
+    out.loc[:, "brittle_x_floors"] = (
+        out["brittle_material"].astype(np.float32) * out["count_floors_pre_eq"]
+    ).astype(np.float32)
+
+    # high-seismic zone x brittle material: mud x geo1 delta ranges -0.164 to +0.818 across regions
+    out.loc[:, "high_seismic_x_brittle"] = (
+        out["geo1_high_seismic"].astype(np.float32) * out["brittle_material"]
     ).astype(np.float32)
 
     return out
@@ -366,7 +399,9 @@ def _add_autofe_features(
     position_t = (df_raw["position"] == "t").astype(np.int8).values
     mud_stone = df_raw["has_superstructure_mud_mortar_stone"].values.astype(np.int8)
     rc_eng = df_raw["has_superstructure_rc_engineered"].values.astype(np.int8)
-    cement_brick = df_raw["has_superstructure_cement_mortar_brick"].values.astype(np.int8)
+    cement_brick = df_raw["has_superstructure_cement_mortar_brick"].values.astype(
+        np.int8
+    )
     adobe = df_raw["has_superstructure_adobe_mud"].values.astype(np.int8)
     bamboo = df_raw["has_superstructure_bamboo"].values.astype(np.int8)
     age = df_raw["age"].values.astype(np.float32)
@@ -383,11 +418,11 @@ def _add_autofe_features(
     _all: dict[str, np.ndarray] = {
         "foundation_r_flag": found_r,
         "foundation_r_x_geo2": found_r.astype(np.float32) * geo2_k2,
-        "floors_sq": floors ** 2,
+        "floors_sq": floors**2,
         "floors_x_height": floors * height,
         "area_x_floors": area * floors,
         "height_to_floors": height / (floors + 0.5),
-        "age_sq": age ** 2,
+        "age_sq": age**2,
         "age_x_floors": age * floors,
         "cement_brick_x_age": cement_brick.astype(np.float32) * age,
         "mud_stone_x_floors": mud_stone.astype(np.float32) * floors,
@@ -522,6 +557,20 @@ def build_features(
         if te is not None:
             te.loc[:, "age_x_geo2_damage"] = te["age"] * te[geo2_k2_col]
 
+        # material_vs_geo3: material quality score minus geo3 expected damage
+        # Captures buildings better/worse than their zone — addresses G1 miss in bad regions
+        # geo3 expected damage = 1*P(G1|geo3) + 2*P(G2|geo3) + 3*P(G3|geo3)
+        geo3_k1 = "geo_level_3_id_te_k1"
+        geo3_k2 = "geo_level_3_id_te_k2"
+        geo3_k3 = "geo_level_3_id_te_k3"
+        for frame in [tr, va] + ([te] if te is not None else []):
+            geo3_expected = (
+                frame[geo3_k1] * 1.0 + frame[geo3_k2] * 2.0 + frame[geo3_k3] * 3.0
+            )
+            frame.loc[:, "material_vs_geo3"] = (
+                frame["material_strength"].astype(float) - geo3_expected
+            ).astype(np.float32)
+
         # Geo damage variance: config-gated (tested 2026-05-05, hurts LGB −0.0018)
         if cfg["features"].get("geo3_damage_std", False):
             geo3_col = "geo_level_3_id"
@@ -555,7 +604,10 @@ def build_features(
                     te = _apply_target_encoder(te, col, enc)
             # Drop original low-card cat columns (replaced by TE versions)
             for frame in [tr, va] + ([te] if te is not None else []):
-                frame.drop(columns=[c for c in cat_cols_low if c in frame.columns], inplace=True)
+                frame.drop(
+                    columns=[c for c in cat_cols_low if c in frame.columns],
+                    inplace=True,
+                )
         else:
             le_map: dict[str, LabelEncoder] = {}
             for col in cat_cols_low:
@@ -585,10 +637,16 @@ def build_features(
 
         # -- AutoFE: append selected candidate features --
         if autofe_features:
-            X_train = _add_autofe_features(df_train.reset_index(drop=True), X_train, autofe_features)
-            X_val = _add_autofe_features(df_val.reset_index(drop=True), X_val, autofe_features)
+            X_train = _add_autofe_features(
+                df_train.reset_index(drop=True), X_train, autofe_features
+            )
+            X_val = _add_autofe_features(
+                df_val.reset_index(drop=True), X_val, autofe_features
+            )
             if X_test is not None and df_test is not None:
-                X_test = _add_autofe_features(df_test.reset_index(drop=True), X_test, autofe_features)
+                X_test = _add_autofe_features(
+                    df_test.reset_index(drop=True), X_test, autofe_features
+                )
 
         return X_train, X_val, X_test, []
 

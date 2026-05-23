@@ -660,14 +660,21 @@ def train_kfold(
         # Load AutoFE selected features if available (lgb only — XGB hurt by these features)
         autofe_feats: list[str] | None = None
         if model_name == "lgb":
-            autofe_path = Path(cfg["output"]["models_dir"]) / "autofe_best_features.json"
+            autofe_path = (
+                Path(cfg["output"]["models_dir"]) / "autofe_best_features.json"
+            )
             if autofe_path.exists():
                 with open(autofe_path, encoding="utf-8") as _f:
                     autofe_feats = json.load(_f).get("selected", [])
 
         X_train, X_val, X_test, cat_cols = build_features(
-            df_tr, df_va, df_test, cfg, mode,
-            use_embeddings=use_emb, use_cat_te=use_cte,
+            df_tr,
+            df_va,
+            df_test,
+            cfg,
+            mode,
+            use_embeddings=use_emb,
+            use_cat_te=use_cte,
             autofe_features=autofe_feats,
         )
 
@@ -1010,7 +1017,9 @@ def main() -> None:
         mean_best_iter = hp_record["mean_best_iter"]
         logger.info(
             "[%s] Refit-full: best_params=%s mean_best_iter=%d",
-            args.model.upper(), best_params, mean_best_iter,
+            args.model.upper(),
+            best_params,
+            mean_best_iter,
         )
 
         # Build features on full train (no val split — use a dummy val = first 1000 rows)
@@ -1027,8 +1036,13 @@ def main() -> None:
         dummy_val = df_train_full.iloc[:1000].reset_index(drop=True)
         df_tr = df_train_full.reset_index(drop=True)
         X_full, _, X_test, cat_cols = build_features(
-            df_tr, dummy_val, df_test, cfg, mode,
-            use_embeddings=use_emb, use_cat_te=use_cte,
+            df_tr,
+            dummy_val,
+            df_test,
+            cfg,
+            mode,
+            use_embeddings=use_emb,
+            use_cat_te=use_cte,
             autofe_features=autofe_feats_refit,
         )
         y_full = y_all
@@ -1042,7 +1056,13 @@ def main() -> None:
 
         logger.info("[%s] Refitting on %d samples...", args.model.upper(), len(X_full))
         final_model = refit_model(
-            args.model, X_full, y_full, refit_params, mean_best_iter, cat_cols, n_classes,
+            args.model,
+            X_full,
+            y_full,
+            refit_params,
+            mean_best_iter,
+            cat_cols,
+            n_classes,
         )
         test_proba = predict_proba(args.model, final_model, X_test)
         np.save(models_dir / f"{args.model}_test_proba.npy", test_proba)

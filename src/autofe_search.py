@@ -124,7 +124,9 @@ def compute_candidates(
     rc_eng = df_raw["has_superstructure_rc_engineered"].values.astype(np.int8)
     rc_noneng = df_raw["has_superstructure_rc_non_engineered"].values.astype(np.int8)
     timber = df_raw["has_superstructure_timber"].values.astype(np.int8)
-    cement_brick = df_raw["has_superstructure_cement_mortar_brick"].values.astype(np.int8)
+    cement_brick = df_raw["has_superstructure_cement_mortar_brick"].values.astype(
+        np.int8
+    )
     adobe = df_raw["has_superstructure_adobe_mud"].values.astype(np.int8)
     bamboo = df_raw["has_superstructure_bamboo"].values.astype(np.int8)
     age = df_raw["age"].values.astype(np.float32)
@@ -141,16 +143,16 @@ def compute_candidates(
 
     # Foundation
     cands["foundation_r_flag"] = found_r
-    cands["foundation_r_x_geo2"] = (found_r.astype(np.float32) * geo2_k2)
+    cands["foundation_r_x_geo2"] = found_r.astype(np.float32) * geo2_k2
 
     # Structural
-    cands["floors_sq"] = floors ** 2
+    cands["floors_sq"] = floors**2
     cands["floors_x_height"] = floors * height
     cands["area_x_floors"] = area * floors
     cands["height_to_floors"] = height / (floors + 0.5)
 
     # Age
-    cands["age_sq"] = age ** 2
+    cands["age_sq"] = age**2
     cands["age_x_floors"] = age * floors
     cands["log_age"] = np.log1p(age)
 
@@ -182,7 +184,9 @@ def compute_candidates(
 
     # Composite risk
     cands["old_mud_stone"] = ((age > 25) & (mud_stone == 1)).astype(np.int8)
-    cands["foundation_x_mud"] = (found_r.astype(bool) & (mud_stone == 1)).astype(np.int8)
+    cands["foundation_x_mud"] = (found_r.astype(bool) & (mud_stone == 1)).astype(
+        np.int8
+    )
 
     # Position (EDA: position='t' in hard samples)
     cands["position_t_flag"] = position_t
@@ -193,9 +197,7 @@ def compute_candidates(
 
     # Secondary
     sec_sum = sum(
-        df_raw[c].values.astype(np.int8)
-        for c in _SECONDARY_COLS
-        if c in df_raw.columns
+        df_raw[c].values.astype(np.int8) for c in _SECONDARY_COLS if c in df_raw.columns
     )
     cands["secondary_count"] = sec_sum.astype(np.int8)
     cands["secondary_x_area"] = secondary * area
@@ -268,7 +270,9 @@ def _autofe_objective(
 
 def main() -> None:
     """Run AutoFE search and save best feature selection to JSON."""
-    parser = argparse.ArgumentParser(description="AutoFE search via Optuna (LGB fold 0)")
+    parser = argparse.ArgumentParser(
+        description="AutoFE search via Optuna (LGB fold 0)"
+    )
     parser.add_argument("--config", required=True, help="Path to config.yaml")
     parser.add_argument("--n-trials", type=int, default=40, help="Optuna trials")
     args = parser.parse_args()
@@ -312,8 +316,13 @@ def main() -> None:
     # -----------------------------------------------------------------------
     print("[AutoFE] Building base features (fold 0, no embeddings)...", flush=True)
     X_tr_base, X_va_base, _, _ = build_features(
-        df_tr_raw, df_va_raw, None, cfg, mode="lgb_xgb",
-        use_embeddings=False, use_cat_te=True,
+        df_tr_raw,
+        df_va_raw,
+        None,
+        cfg,
+        mode="lgb_xgb",
+        use_embeddings=False,
+        use_cat_te=True,
     )
     print(f"[AutoFE] Base feature shape: {X_tr_base.shape}", flush=True)
 
@@ -327,8 +336,12 @@ def main() -> None:
         saved_hp = saved_json.get("best_params", saved_json)
         lgb_params: dict = {
             "num_leaves": saved_hp.get("num_leaves", lgb_cfg["num_leaves"]),
-            "min_child_samples": saved_hp.get("min_child_samples", lgb_cfg["min_child_samples"]),
-            "colsample_bytree": saved_hp.get("colsample_bytree", lgb_cfg["colsample_bytree"]),
+            "min_child_samples": saved_hp.get(
+                "min_child_samples", lgb_cfg["min_child_samples"]
+            ),
+            "colsample_bytree": saved_hp.get(
+                "colsample_bytree", lgb_cfg["colsample_bytree"]
+            ),
             "subsample": saved_hp.get("subsample", lgb_cfg.get("subsample", 0.8)),
             "subsample_freq": 1,
             "learning_rate": saved_hp.get("learning_rate", lgb_cfg["learning_rate"]),
@@ -382,7 +395,9 @@ def main() -> None:
         eval_set=[(X_va_base, y_va)],
         callbacks=[early_stopping(es_base, verbose=False), log_evaluation(-1)],
     )
-    baseline_score = float(f1_score(y_va, model_base.predict(X_va_base), average="micro"))
+    baseline_score = float(
+        f1_score(y_va, model_base.predict(X_va_base), average="micro")
+    )
     print(f"[AutoFE] Baseline fold-0 F1: {baseline_score:.4f}", flush=True)
 
     # -----------------------------------------------------------------------
@@ -400,9 +415,15 @@ def main() -> None:
     def objective(trial: optuna.Trial) -> float:
         return _autofe_objective(
             trial,
-            X_tr_base, cands_tr, y_tr,
-            X_va_base, cands_va, y_va,
-            dict(lgb_params), n_classes, seed,
+            X_tr_base,
+            cands_tr,
+            y_tr,
+            X_va_base,
+            cands_va,
+            y_va,
+            dict(lgb_params),
+            n_classes,
+            seed,
         )
 
     study.optimize(objective, n_trials=args.n_trials, show_progress_bar=True)
@@ -418,8 +439,12 @@ def main() -> None:
     not_selected = [n for n in CANDIDATE_NAMES if n not in best_selected]
 
     print("\n" + "=" * 60, flush=True)
-    print(f"[AutoFE] Best fold-0 F1: {best_score:.4f}  (baseline: {baseline_score:.4f}  delta: {best_score - baseline_score:+.4f})")
-    print(f"[AutoFE] Selected ({len(best_selected)}/{len(CANDIDATE_NAMES)}):", flush=True)
+    print(
+        f"[AutoFE] Best fold-0 F1: {best_score:.4f}  (baseline: {baseline_score:.4f}  delta: {best_score - baseline_score:+.4f})"
+    )
+    print(
+        f"[AutoFE] Selected ({len(best_selected)}/{len(CANDIDATE_NAMES)}):", flush=True
+    )
     for name in best_selected:
         print(f"  + {name}", flush=True)
     print(f"[AutoFE] Not selected ({len(not_selected)}):", flush=True)
@@ -435,7 +460,9 @@ def main() -> None:
         "fold0_baseline": baseline_score,
         "fold0_delta": best_score - baseline_score,
         "n_trials": args.n_trials,
-        "all_params": {name: bool(best_trial.params.get(name, False)) for name in CANDIDATE_NAMES},
+        "all_params": {
+            name: bool(best_trial.params.get(name, False)) for name in CANDIDATE_NAMES
+        },
     }
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:

@@ -5,7 +5,6 @@ Run from project root: python notebooks/01_eda.py
 """
 
 import logging
-import os
 import warnings
 from pathlib import Path
 
@@ -45,7 +44,10 @@ test = pd.read_csv("data/raw/test_values.csv", encoding="utf-8")
 train = train_values.merge(train_labels, on="building_id")
 
 log.info("Train: %s | Test: %s", train.shape, test.shape)
-log.info("Cols in train not in test: %s", set(train.columns) - set(test.columns) - {TARGET_COL})
+log.info(
+    "Cols in train not in test: %s",
+    set(train.columns) - set(test.columns) - {TARGET_COL},
+)
 log.info("Dtypes:\n%s", train.dtypes.value_counts().to_string())
 
 # ──────────────────────────────────────────────
@@ -57,7 +59,9 @@ log.info("Class distribution (normalized):\n%s", vc.to_string())
 log.info("Counts:\n%s", train[TARGET_COL].value_counts().sort_index().to_string())
 
 fig, ax = plt.subplots(figsize=(6, 4))
-train[TARGET_COL].value_counts().sort_index().plot(kind="bar", ax=ax, color=["#4C72B0", "#DD8452", "#55A868"])
+train[TARGET_COL].value_counts().sort_index().plot(
+    kind="bar", ax=ax, color=["#4C72B0", "#DD8452", "#55A868"]
+)
 ax.set_title("Target distribution — damage_grade")
 ax.set_xlabel("damage_grade")
 ax.set_ylabel("count")
@@ -70,7 +74,11 @@ plt.close()
 # ──────────────────────────────────────────────
 log.info("\n=== STEP 3b — CHI2 CATEGORICALS vs TARGET ===")
 cat_cols = train.select_dtypes(include="object").columns.tolist()
-num_cols = [c for c in train.select_dtypes(include="number").columns if c not in ("building_id", TARGET_COL)]
+num_cols = [
+    c
+    for c in train.select_dtypes(include="number").columns
+    if c not in ("building_id", TARGET_COL)
+]
 
 log.info("Numeric features: %d | Categorical: %d", len(num_cols), len(cat_cols))
 
@@ -78,14 +86,28 @@ chi2_results = []
 for col in cat_cols:
     ct = pd.crosstab(train[col], train[TARGET_COL])
     chi2, p, dof, _ = chi2_contingency(ct)
-    chi2_results.append({"feature": col, "chi2": round(chi2, 2), "p_value": round(p, 6), "n_unique": train[col].nunique()})
+    chi2_results.append(
+        {
+            "feature": col,
+            "chi2": round(chi2, 2),
+            "p_value": round(p, 6),
+            "n_unique": train[col].nunique(),
+        }
+    )
 
 # Also run chi2 on binary/integer columns (superstructure flags, etc.)
 binary_cols = [c for c in num_cols if train[c].nunique() <= 5]
 for col in binary_cols:
     ct = pd.crosstab(train[col].astype(str), train[TARGET_COL])
     chi2, p, dof, _ = chi2_contingency(ct)
-    chi2_results.append({"feature": col, "chi2": round(chi2, 2), "p_value": round(p, 6), "n_unique": train[col].nunique()})
+    chi2_results.append(
+        {
+            "feature": col,
+            "chi2": round(chi2, 2),
+            "p_value": round(p, 6),
+            "n_unique": train[col].nunique(),
+        }
+    )
 
 chi2_df = pd.DataFrame(chi2_results).sort_values("chi2", ascending=False)
 log.info("Chi2 vs damage_grade (all features):\n%s", chi2_df.to_string(index=False))
@@ -96,7 +118,9 @@ log.info("Chi2 vs damage_grade (all features):\n%s", chi2_df.to_string(index=Fal
 log.info("\n=== STEP 4b — TRAIN vs TEST SHIFT ===")
 
 
-def population_stability_index(train_col: pd.Series, test_col: pd.Series, n_bins: int = 10) -> float:
+def population_stability_index(
+    train_col: pd.Series, test_col: pd.Series, n_bins: int = 10
+) -> float:
     """Compute PSI between train and test distributions."""
     combined = pd.concat([train_col, test_col]).dropna()
     bins = np.quantile(combined, np.linspace(0, 1, n_bins + 1))
@@ -116,13 +140,15 @@ for col in num_cols:
         continue
     psi = population_stability_index(train[col], test[col])
     ks_stat, ks_pval = ks_2samp(train[col].dropna(), test[col].dropna())
-    shift_report.append({
-        "feature": col,
-        "psi": round(psi, 4),
-        "ks_stat": round(ks_stat, 4),
-        "ks_pval": round(ks_pval, 4),
-        "severity": "SEVERE" if psi > 0.2 else ("MODERATE" if psi > 0.1 else "ok"),
-    })
+    shift_report.append(
+        {
+            "feature": col,
+            "psi": round(psi, 4),
+            "ks_stat": round(ks_stat, 4),
+            "ks_pval": round(ks_pval, 4),
+            "severity": "SEVERE" if psi > 0.2 else ("MODERATE" if psi > 0.1 else "ok"),
+        }
+    )
 
 shift_df = pd.DataFrame(shift_report).sort_values("psi", ascending=False)
 log.info("Distribution shift (PSI):\n%s", shift_df.to_string(index=False))
@@ -137,31 +163,47 @@ log.info("\nAdversarial validation...")
 av_features = [c for c in num_cols if c in test.columns]
 train_av = train[av_features].fillna(-999).copy()
 test_av = test[av_features].fillna(-999).copy()
-combined_av = pd.concat([train_av.assign(_is_test=0), test_av.assign(_is_test=1)], ignore_index=True)
+combined_av = pd.concat(
+    [train_av.assign(_is_test=0), test_av.assign(_is_test=1)], ignore_index=True
+)
 X_av = combined_av[av_features].values
 y_av = combined_av["_is_test"].values
 
 clf_av = GradientBoostingClassifier(n_estimators=100, max_depth=4, random_state=42)
 cv_av = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
 av_aucs = [
-    roc_auc_score(y_av[vi], clf_av.fit(X_av[ti], y_av[ti]).predict_proba(X_av[vi])[:, 1])
+    roc_auc_score(
+        y_av[vi], clf_av.fit(X_av[ti], y_av[ti]).predict_proba(X_av[vi])[:, 1]
+    )
     for ti, vi in cv_av.split(X_av, y_av)
 ]
 av_auc_mean = np.mean(av_aucs)
 clf_av.fit(X_av, y_av)
-av_importance = pd.Series(clf_av.feature_importances_, index=av_features).sort_values(ascending=False)
+av_importance = pd.Series(clf_av.feature_importances_, index=av_features).sort_values(
+    ascending=False
+)
 log.info("AV AUC: %.4f +/- %.4f", av_auc_mean, np.std(av_aucs))
-log.info("Top 10 features separating train vs test:\n%s", av_importance.head(10).to_string())
+log.info(
+    "Top 10 features separating train vs test:\n%s", av_importance.head(10).to_string()
+)
 
 # ──────────────────────────────────────────────
 # STEP 5 — Correlation with target
 # ──────────────────────────────────────────────
 log.info("\n=== STEP 5 — CORRELATION WITH TARGET ===")
 corr_pearson = train[num_cols + [TARGET_COL]].corr()[TARGET_COL].drop(TARGET_COL)
-corr_spearman = train[num_cols + [TARGET_COL]].corr(method="spearman")[TARGET_COL].drop(TARGET_COL)
+corr_spearman = (
+    train[num_cols + [TARGET_COL]].corr(method="spearman")[TARGET_COL].drop(TARGET_COL)
+)
 
-log.info("Top 15 Pearson:\n%s", corr_pearson.abs().sort_values(ascending=False).head(15).to_string())
-log.info("\nTop 15 Spearman:\n%s", corr_spearman.abs().sort_values(ascending=False).head(15).to_string())
+log.info(
+    "Top 15 Pearson:\n%s",
+    corr_pearson.abs().sort_values(ascending=False).head(15).to_string(),
+)
+log.info(
+    "\nTop 15 Spearman:\n%s",
+    corr_spearman.abs().sort_values(ascending=False).head(15).to_string(),
+)
 
 corr_matrix = train[num_cols].corr().abs()
 upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
@@ -179,8 +221,11 @@ for c1, c2, v in sorted(high_corr_pairs, key=lambda x: -x[2])[:10]:
 fig, ax = plt.subplots(figsize=(14, 12))
 sns.heatmap(
     train[num_cols].corr(),
-    ax=ax, cmap="coolwarm", center=0,
-    annot=len(num_cols) <= 20, fmt=".1f",
+    ax=ax,
+    cmap="coolwarm",
+    center=0,
+    annot=len(num_cols) <= 20,
+    fmt=".1f",
     linewidths=0.3,
 )
 ax.set_title("Feature correlation matrix (train)")
@@ -196,7 +241,9 @@ X_rf = train[num_cols].fillna(-999)
 y_rf = train[TARGET_COL]
 rf = RandomForestClassifier(n_estimators=200, max_depth=8, random_state=42, n_jobs=-1)
 rf.fit(X_rf, y_rf)
-importance = pd.Series(rf.feature_importances_, index=num_cols).sort_values(ascending=False)
+importance = pd.Series(rf.feature_importances_, index=num_cols).sort_values(
+    ascending=False
+)
 log.info("Top 20 RF importance:\n%s", importance.head(20).to_string())
 log.info("\nBottom 10 (lowest signal):\n%s", importance.tail(10).to_string())
 
@@ -227,20 +274,28 @@ ensemble_proba = sum(weights[m] * val_probas[m] for m in model_names if m in val
 ensemble_pred = ensemble_proba.argmax(axis=1) + 1  # damage_grade is 1-indexed
 
 # Align with train labels (same ordering as kfold)
-y_true_raw = train.sort_values("building_id")[TARGET_COL].values  # NOTE: may not match fold order
+y_true_raw = train.sort_values("building_id")[
+    TARGET_COL
+].values  # NOTE: may not match fold order
 # Use the index from training labels directly (they're already aligned)
 y_true = train[TARGET_COL].values  # 260601 samples
 
 log.info("\nPer-class classification report:")
-report = classification_report(y_true, ensemble_pred, target_names=["grade_1", "grade_2", "grade_3"])
+report = classification_report(
+    y_true, ensemble_pred, target_names=["grade_1", "grade_2", "grade_3"]
+)
 log.info("\n%s", report)
 
 # Confusion matrix
 fig, ax = plt.subplots(figsize=(7, 6))
 ConfusionMatrixDisplay.from_predictions(
-    y_true, ensemble_pred,
+    y_true,
+    ensemble_pred,
     display_labels=["grade_1", "grade_2", "grade_3"],
-    ax=ax, normalize="true", values_format=".2f", cmap="Blues",
+    ax=ax,
+    normalize="true",
+    values_format=".2f",
+    cmap="Blues",
 )
 ax.set_title("Normalized Confusion Matrix — Ensemble OOF")
 plt.tight_layout()
@@ -258,16 +313,30 @@ hardest_df["true_class_prob"] = true_class_prob[hardest_idx]
 hardest_df = hardest_df.sort_values("true_class_prob")
 
 log.info("\nTop 10 hardest samples:")
-log.info(hardest_df[["building_id", "true_label", "pred_label", "true_class_prob"] + num_cols[:5]].head(10).to_string(index=False))
+log.info(
+    hardest_df[
+        ["building_id", "true_label", "pred_label", "true_class_prob"] + num_cols[:5]
+    ]
+    .head(10)
+    .to_string(index=False)
+)
 
 # Error rate by feature value (find patterns in hardest samples)
 log.info("\n--- Pattern analysis in 200 hardest samples ---")
 hard_mask = np.zeros(len(train), dtype=bool)
 hard_mask[hardest_idx] = True
 
-for col in ["foundation_type", "roof_type", "land_surface_condition", "position", "plan_configuration",
-            "has_superstructure_mud_mortar_stone", "has_superstructure_cement_mortar_brick",
-            "has_superstructure_rc_non_engineered", "has_superstructure_rc_engineered"]:
+for col in [
+    "foundation_type",
+    "roof_type",
+    "land_surface_condition",
+    "position",
+    "plan_configuration",
+    "has_superstructure_mud_mortar_stone",
+    "has_superstructure_cement_mortar_brick",
+    "has_superstructure_rc_non_engineered",
+    "has_superstructure_rc_engineered",
+]:
     if col not in train.columns:
         continue
     hard_rate = train.loc[hard_mask, col].value_counts(normalize=True)
@@ -275,7 +344,9 @@ for col in ["foundation_type", "roof_type", "land_surface_condition", "position"
     diff = (hard_rate - all_rate).sort_values(ascending=False)
     top_overrep = diff.head(3)
     if top_overrep.abs().max() > 0.05:
-        log.info("  %s — overrepresented in hard samples: %s", col, top_overrep.to_dict())
+        log.info(
+            "  %s — overrepresented in hard samples: %s", col, top_overrep.to_dict()
+        )
 
 # Confusion breakdown: which class pairs are most confused
 log.info("\n--- Confusion breakdown ---")
@@ -285,7 +356,9 @@ log.info("\n%s", conf_matrix.to_string())
 # Error rate by geo_level_1 (are some geographic zones harder?)
 train_copy = train.copy()
 train_copy["error"] = (y_true != ensemble_pred).astype(int)
-geo1_err = train_copy.groupby("geo_level_1_id")["error"].mean().sort_values(ascending=False)
+geo1_err = (
+    train_copy.groupby("geo_level_1_id")["error"].mean().sort_values(ascending=False)
+)
 log.info("\nTop 10 geo_level_1 by error rate:\n%s", geo1_err.head(10).to_string())
 
 # Error rate by age quantile
@@ -294,7 +367,9 @@ age_err = train_copy.groupby("age_bin", observed=True)["error"].mean()
 log.info("\nError rate by age quantile:\n%s", age_err.to_string())
 
 # Error rate by height_percentage
-train_copy["height_bin"] = pd.qcut(train_copy["height_percentage"], q=5, duplicates="drop")
+train_copy["height_bin"] = pd.qcut(
+    train_copy["height_percentage"], q=5, duplicates="drop"
+)
 height_err = train_copy.groupby("height_bin", observed=True)["error"].mean()
 log.info("\nError rate by height quantile:\n%s", height_err.to_string())
 

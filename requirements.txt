@@ -13,6 +13,10 @@ scipy==1.17.1
 # Neural embeddings
 torch==2.11.0+cpu  # CPU-only build; install via: pip install torch --index-url https://download.pytorch.org/whl/cpu
 
+# Visualization
+matplotlib==3.10.3
+seaborn==0.13.2
+
 # Serialization & config
 joblib==1.5.3
 pyyaml==6.0.3
