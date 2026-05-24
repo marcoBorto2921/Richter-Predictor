@@ -636,14 +636,9 @@ def build_features(
                 if te is not None:
                     te = _apply_target_encoder(te, geo_col, enc)
 
-        # -- Neighborhood structural features (EXP-014) --
-        # Fitted on train fold only — captures zone structural composition
-        # beyond what GLMM damage encoding provides.
-        neighborhood_stats = _fit_neighborhood_features(df_train, "geo_level_3_id")
-        tr = _apply_neighborhood_features(tr, "geo_level_3_id", neighborhood_stats)
-        va = _apply_neighborhood_features(va, "geo_level_3_id", neighborhood_stats)
-        if te is not None:
-            te = _apply_neighborhood_features(te, "geo_level_3_id", neighborhood_stats)
+        # EXP-014 neighborhood features: OOF +0.0002 but LB −0.0007 (0.7511 vs 0.7518).
+        # Overfits train distribution — geo3 zone aggregates leak train target structure.
+        # DISABLED.
 
         # Interaction: age × geo_level_2 class-2 encoding (high-damage zones × age)
         geo2_k2_col = "geo_level_2_id_te_k2"
